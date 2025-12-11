@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import xml.etree.ElementTree as ET
 from io import BytesIO
-import zipfile
 from datetime import datetime
 
 st.set_page_config(
@@ -54,11 +53,15 @@ def parse_xml_invoice(xml_text):
     try:
         root = ET.fromstring(xml_text)
 
-        # Namespaces comunes en CFDI
+        # Namespaces para CFDI v3.3 y v4.0
         ns = {
-            'cfdi': 'http://www.sat.gob.mx/cfd/3',
+            'cfdi': 'http://www.sat.gob.mx/cfd/4',
+            'cfdi3': 'http://www.sat.gob.mx/cfd/3',
             'tfd': 'http://www.sat.gob.mx/TimbreFiscalDigital'
         }
+
+        # Detectar versión
+        version = root.get('Version', '3.3')
 
         # Datos principales del comprobante
         folio = root.get('Folio', '')
@@ -67,21 +70,36 @@ def parse_xml_invoice(xml_text):
         total = root.get('Total', '0')
         subtotal = root.get('SubTotal', '0')
         metodo_pago = root.get('MetodoPago', '')
-        tipo_cambio = root.get('TipoCambio', '1')
         moneda = root.get('Moneda', 'MXN')
 
-        # Emisor
-        emisor = root.find('cfdi:Emisor', ns) or root.find('Emisor')
+        # Emisor (intentar con namespace, luego sin él)
+        emisor = root.find('cfdi:Emisor', ns)
+        if emisor is None:
+            emisor = root.find('cfdi3:Emisor', ns)
+        if emisor is None:
+            emisor = root.find('Emisor')
+
         emisor_rfc = emisor.get('Rfc', '') if emisor is not None else ''
         emisor_nombre = emisor.get('Nombre', '') if emisor is not None else ''
 
-        # Receptor
-        receptor = root.find('cfdi:Receptor', ns) or root.find('Receptor')
+        # Receptor (intentar con namespace, luego sin él)
+        receptor = root.find('cfdi:Receptor', ns)
+        if receptor is None:
+            receptor = root.find('cfdi3:Receptor', ns)
+        if receptor is None:
+            receptor = root.find('Receptor')
+
         receptor_rfc = receptor.get('Rfc', '') if receptor is not None else ''
         receptor_nombre = receptor.get('Nombre', '') if receptor is not None else ''
 
-        # Conceptos (líneas de factura)
+        # Conceptos (líneas de factura) - CFDI 4.0
         conceptos = root.findall('cfdi:Conceptos/cfdi:Concepto', ns)
+
+        # Si no encuentra con namespace 4.0, intentar con 3.3
+        if not conceptos:
+            conceptos = root.findall('cfdi3:Conceptos/cfdi3:Concepto', ns)
+
+        # Si aún no encuentra, intentar sin namespace
         if not conceptos:
             conceptos = root.findall('.//Concepto')
 
@@ -110,7 +128,12 @@ def parse_xml_invoice(xml_text):
             # Un registro por cada concepto
             for concepto in conceptos:
                 cantidad = concepto.get('Cantidad', '1')
-                precio_unitario = concepto.get('PrecioUnitario', '0')
+
+                # CFDI 4.0 usa ValorUnitario, CFDI 3.3 usa PrecioUnitario
+                precio_unitario = concepto.get('ValorUnitario', '')
+                if not precio_unitario:
+                    precio_unitario = concepto.get('PrecioUnitario', '0')
+
                 importe = concepto.get('Importe', '0')
                 descripcion = concepto.get('Descripcion', '')
 
@@ -255,6 +278,7 @@ else:
 
     ### ✨ Características:
     - ✅ Procesa múltiples archivos XML simultáneamente
+    - ✅ Soporta CFDI v3.3 y v4.0
     - ✅ Extrae datos completos (emisor, receptor, conceptos, totales)
     - ✅ Genera Excel con formato profesional
     - ✅ Vista previa de los datos antes de descargar
