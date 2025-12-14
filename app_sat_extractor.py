@@ -71,6 +71,11 @@ def parse_xml_invoice(xml_text):
         subtotal = root.get('SubTotal', '0')
         metodo_pago = root.get('MetodoPago', '')
         moneda = root.get('Moneda', 'MXN')
+        tipo_comprobante = root.get('TipoDeComprobante', '')
+
+        # Extraer UUID del TimbreFiscalDigital (identificador oficial SAT)
+        timbre = root.find('.//tfd:TimbreFiscalDigital', ns)
+        uuid = timbre.get('UUID', '') if timbre is not None else ''
 
         # Emisor (intentar con namespace, luego sin él)
         emisor = root.find('cfdi:Emisor', ns)
@@ -108,9 +113,11 @@ def parse_xml_invoice(xml_text):
         if len(conceptos) == 0:
             # Si no hay conceptos, crear un registro único
             invoices.append({
+                'UUID': uuid,
                 'Folio': folio,
                 'Serie': serie,
                 'Fecha': fecha,
+                'Tipo': tipo_comprobante,
                 'RFC Emisor': emisor_rfc,
                 'Emisor': emisor_nombre,
                 'RFC Receptor': receptor_rfc,
@@ -138,9 +145,11 @@ def parse_xml_invoice(xml_text):
                 descripcion = concepto.get('Descripcion', '')
 
                 invoices.append({
+                    'UUID': uuid,
                     'Folio': folio,
                     'Serie': serie,
                     'Fecha': fecha,
+                    'Tipo': tipo_comprobante,
                     'RFC Emisor': emisor_rfc,
                     'Emisor': emisor_nombre,
                     'RFC Receptor': receptor_rfc,
@@ -224,16 +233,34 @@ if uploaded_files:
 
                 # Ajustar ancho de columnas
                 worksheet = writer.sheets['Facturas']
+                column_widths = {
+                    'UUID': 40,
+                    'Folio': 15,
+                    'Serie': 10,
+                    'Fecha': 20,
+                    'Tipo': 8,
+                    'RFC Emisor': 15,
+                    'Emisor': 30,
+                    'RFC Receptor': 15,
+                    'Receptor': 30,
+                    'Descripción': 50,
+                    'Cantidad': 10,
+                    'Precio Unitario': 15,
+                    'Importe': 15,
+                    'Subtotal': 15,
+                    'Total': 15,
+                    'Moneda': 10,
+                    'Método de Pago': 15
+                }
+
                 for idx, col in enumerate(df.columns):
-                    max_len = max(
-                        df[col].astype(str).map(len).max(),
-                        len(col)
-                    ) + 2
-                    worksheet.column_dimensions[chr(65 + idx)].width = min(max_len, 40)
+                    width = column_widths.get(col, 20)
+                    col_letter = chr(65 + idx) if idx < 26 else chr(65 + idx // 26 - 1) + chr(65 + idx % 26)
+                    worksheet.column_dimensions[col_letter].width = width
 
             output.seek(0)
 
-            st.markdown(f'<div class="success-box">✅ Éxito: {len(df)} registros procesados</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="success-box">✅ Éxito: {len(df)} registros procesados de {df["UUID"].nunique()} facturas</div>', unsafe_allow_html=True)
 
             st.download_button(
                 label="📥 Descargar Excel",
@@ -259,7 +286,7 @@ if uploaded_files:
         if df is not None and len(df) > 0:
             st.markdown("### 👁️ Vista Previa (primeros 5 registros)")
             st.dataframe(df.head(), use_container_width=True)
-            st.markdown(f"**Total de registros:** {len(df)}")
+            st.markdown(f"**Total de registros:** {len(df)} | **Facturas únicas:** {df['UUID'].nunique()}")
 
             if errors:
                 st.warning("⚠️ Advertencias:")
@@ -279,13 +306,15 @@ else:
     ### ✨ Características:
     - ✅ Procesa múltiples archivos XML simultáneamente
     - ✅ Soporta CFDI v3.3 y v4.0
+    - ✅ Extrae UUID (identificador oficial SAT)
     - ✅ Extrae datos completos (emisor, receptor, conceptos, totales)
     - ✅ Genera Excel con formato profesional
     - ✅ Vista previa de los datos antes de descargar
     - ✅ Manejo automático de errores
 
     ### 📋 Información extraída:
-    - Folio, Serie, Fecha
+    - **UUID** - Identificador único fiscal (TimbreFiscalDigital)
+    - Folio, Serie, Fecha, Tipo de Comprobante
     - RFC y nombre del Emisor
     - RFC y nombre del Receptor
     - Descripción, Cantidad, Precio Unitario, Importe
