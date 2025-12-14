@@ -46,10 +46,10 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.markdown('<div class="header"><h1>📊 Extractor SAT XML → Excel</h1><p>Convierte tus facturas XML del SAT a un archivo Excel de manera fácil</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="header"><h1>📊 Extractor SAT XML → Excel</h1><p>Convierte tus facturas XML del SAT a un archivo Excel con desglose de impuestos</p></div>', unsafe_allow_html=True)
 
 def parse_xml_invoice(xml_text):
-    """Parsea un archivo XML de factura SAT y extrae los datos"""
+    """Parsea un archivo XML de factura SAT y extrae los datos incluyendo impuestos"""
     try:
         root = ET.fromstring(xml_text)
 
@@ -67,7 +67,7 @@ def parse_xml_invoice(xml_text):
         moneda = root.get('Moneda', 'MXN')
         tipo_comprobante = root.get('TipoDeComprobante', '')
 
-        # Extraer UUID del TimbreFiscalDigital (identificador oficial SAT)
+        # Extraer UUID del TimbreFiscalDigital
         timbre = root.find('.//tfd:TimbreFiscalDigital', ns)
         uuid = timbre.get('UUID', '') if timbre is not None else ''
 
@@ -104,6 +104,10 @@ def parse_xml_invoice(xml_text):
                 'Cantidad': '',
                 'Precio Unitario': '',
                 'Importe': '',
+                'IVA': '',
+                'ISR Retenido': '',
+                'IVA Retenido': '',
+                'IEPS': '',
                 'Subtotal': subtotal,
                 'Total': total,
                 'Moneda': moneda
@@ -121,6 +125,51 @@ def parse_xml_invoice(xml_text):
                 importe = concepto.get('Importe', '0')
                 descripcion = concepto.get('Descripcion', '')
 
+                # Extraer impuestos del concepto
+                iva_traslado = 0.0
+                isr_retenido = 0.0
+                iva_retenido = 0.0
+                ieps = 0.0
+
+                impuestos_concepto = concepto.find('cfdi:Impuestos', ns)
+                if impuestos_concepto is None:
+                    impuestos_concepto = concepto.find('cfdi3:Impuestos', ns)
+                if impuestos_concepto is None:
+                    impuestos_concepto = concepto.find('Impuestos')
+
+                if impuestos_concepto is not None:
+                    # Traslados (IVA, IEPS)
+                    traslados = impuestos_concepto.findall('cfdi:Traslados/cfdi:Traslado', ns)
+                    if not traslados:
+                        traslados = impuestos_concepto.findall('cfdi3:Traslados/cfdi3:Traslado', ns)
+                    if not traslados:
+                        traslados = impuestos_concepto.findall('.//Traslado')
+
+                    for traslado in traslados:
+                        impuesto_tipo = traslado.get('Impuesto', '')
+                        importe_imp = float(traslado.get('Importe', '0'))
+
+                        if impuesto_tipo == '002':  # IVA
+                            iva_traslado += importe_imp
+                        elif impuesto_tipo == '003':  # IEPS
+                            ieps += importe_imp
+
+                    # Retenciones (ISR, IVA)
+                    retenciones = impuestos_concepto.findall('cfdi:Retenciones/cfdi:Retencion', ns)
+                    if not retenciones:
+                        retenciones = impuestos_concepto.findall('cfdi3:Retenciones/cfdi3:Retencion', ns)
+                    if not retenciones:
+                        retenciones = impuestos_concepto.findall('.//Retencion')
+
+                    for retencion in retenciones:
+                        impuesto_tipo = retencion.get('Impuesto', '')
+                        importe_imp = float(retencion.get('Importe', '0'))
+
+                        if impuesto_tipo == '001':  # ISR
+                            isr_retenido += importe_imp
+                        elif impuesto_tipo == '002':  # IVA
+                            iva_retenido += importe_imp
+
                 invoices.append({
                     'UUID': uuid,
                     'Fecha': fecha,
@@ -131,6 +180,10 @@ def parse_xml_invoice(xml_text):
                     'Cantidad': cantidad,
                     'Precio Unitario': precio_unitario,
                     'Importe': importe,
+                    'IVA': f"{iva_traslado:.2f}" if iva_traslado > 0 else '0.00',
+                    'ISR Retenido': f"{isr_retenido:.2f}" if isr_retenido > 0 else '0.00',
+                    'IVA Retenido': f"{iva_retenido:.2f}" if iva_retenido > 0 else '0.00',
+                    'IEPS': f"{ieps:.2f}" if ieps > 0 else '0.00',
                     'Subtotal': subtotal,
                     'Total': total,
                     'Moneda': moneda
@@ -214,9 +267,13 @@ if uploaded_files:
                     'Descripción': 50,
                     'Cantidad': 10,
                     'Precio Unitario': 15,
-                    'Importe': 15,
-                    'Subtotal': 15,
-                    'Total': 15,
+                    'Importe': 12,
+                    'IVA': 12,
+                    'ISR Retenido': 15,
+                    'IVA Retenido': 15,
+                    'IEPS': 12,
+                    'Subtotal': 12,
+                    'Total': 12,
                     'Moneda': 10
                 }
 
@@ -273,7 +330,8 @@ else:
     ### ✨ Características:
     - ✅ Procesa múltiples archivos XML simultáneamente
     - ✅ Soporta CFDI v3.3 y v4.0
-    - ✅ Extrae solo la información esencial
+    - ✅ **Desglose completo de impuestos** (IVA, ISR, IEPS)
+    - ✅ Extrae información esencial
     - ✅ Genera Excel con formato profesional
     - ✅ Vista previa de los datos antes de descargar
     - ✅ Manejo automático de errores
@@ -285,5 +343,13 @@ else:
     - **RFC Emisor** y **Emisor** - Quien emite
     - **Descripción** - Detalle del concepto
     - **Cantidad**, **Precio Unitario**, **Importe**
+    - **IVA** - IVA trasladado (16%)
+    - **ISR Retenido** - ISR retenido si aplica
+    - **IVA Retenido** - IVA retenido si aplica
+    - **IEPS** - Impuesto especial si aplica
     - **Subtotal**, **Total**, **Moneda**
+
+    ### 💡 Tipos de impuestos:
+    - **Traslados**: IVA (16%), IEPS
+    - **Retenciones**: ISR (10%), IVA Retenido (10.67%)
     """)
