@@ -60,16 +60,10 @@ def parse_xml_invoice(xml_text):
             'tfd': 'http://www.sat.gob.mx/TimbreFiscalDigital'
         }
 
-        # Detectar versión
-        version = root.get('Version', '3.3')
-
         # Datos principales del comprobante
-        folio = root.get('Folio', '')
-        serie = root.get('Serie', '')
         fecha = root.get('Fecha', '')
         total = root.get('Total', '0')
         subtotal = root.get('SubTotal', '0')
-        metodo_pago = root.get('MetodoPago', '')
         moneda = root.get('Moneda', 'MXN')
         tipo_comprobante = root.get('TipoDeComprobante', '')
 
@@ -77,7 +71,7 @@ def parse_xml_invoice(xml_text):
         timbre = root.find('.//tfd:TimbreFiscalDigital', ns)
         uuid = timbre.get('UUID', '') if timbre is not None else ''
 
-        # Emisor (intentar con namespace, luego sin él)
+        # Emisor
         emisor = root.find('cfdi:Emisor', ns)
         if emisor is None:
             emisor = root.find('cfdi3:Emisor', ns)
@@ -87,24 +81,12 @@ def parse_xml_invoice(xml_text):
         emisor_rfc = emisor.get('Rfc', '') if emisor is not None else ''
         emisor_nombre = emisor.get('Nombre', '') if emisor is not None else ''
 
-        # Receptor (intentar con namespace, luego sin él)
-        receptor = root.find('cfdi:Receptor', ns)
-        if receptor is None:
-            receptor = root.find('cfdi3:Receptor', ns)
-        if receptor is None:
-            receptor = root.find('Receptor')
-
-        receptor_rfc = receptor.get('Rfc', '') if receptor is not None else ''
-        receptor_nombre = receptor.get('Nombre', '') if receptor is not None else ''
-
-        # Conceptos (líneas de factura) - CFDI 4.0
+        # Conceptos (líneas de factura)
         conceptos = root.findall('cfdi:Conceptos/cfdi:Concepto', ns)
 
-        # Si no encuentra con namespace 4.0, intentar con 3.3
         if not conceptos:
             conceptos = root.findall('cfdi3:Conceptos/cfdi3:Concepto', ns)
 
-        # Si aún no encuentra, intentar sin namespace
         if not conceptos:
             conceptos = root.findall('.//Concepto')
 
@@ -114,22 +96,17 @@ def parse_xml_invoice(xml_text):
             # Si no hay conceptos, crear un registro único
             invoices.append({
                 'UUID': uuid,
-                'Folio': folio,
-                'Serie': serie,
                 'Fecha': fecha,
                 'Tipo': tipo_comprobante,
                 'RFC Emisor': emisor_rfc,
                 'Emisor': emisor_nombre,
-                'RFC Receptor': receptor_rfc,
-                'Receptor': receptor_nombre,
                 'Descripción': '',
                 'Cantidad': '',
                 'Precio Unitario': '',
                 'Importe': '',
                 'Subtotal': subtotal,
                 'Total': total,
-                'Moneda': moneda,
-                'Método de Pago': metodo_pago
+                'Moneda': moneda
             })
         else:
             # Un registro por cada concepto
@@ -146,22 +123,17 @@ def parse_xml_invoice(xml_text):
 
                 invoices.append({
                     'UUID': uuid,
-                    'Folio': folio,
-                    'Serie': serie,
                     'Fecha': fecha,
                     'Tipo': tipo_comprobante,
                     'RFC Emisor': emisor_rfc,
                     'Emisor': emisor_nombre,
-                    'RFC Receptor': receptor_rfc,
-                    'Receptor': receptor_nombre,
                     'Descripción': descripcion,
                     'Cantidad': cantidad,
                     'Precio Unitario': precio_unitario,
                     'Importe': importe,
                     'Subtotal': subtotal,
                     'Total': total,
-                    'Moneda': moneda,
-                    'Método de Pago': metodo_pago
+                    'Moneda': moneda
                 })
 
         return invoices
@@ -235,22 +207,17 @@ if uploaded_files:
                 worksheet = writer.sheets['Facturas']
                 column_widths = {
                     'UUID': 40,
-                    'Folio': 15,
-                    'Serie': 10,
                     'Fecha': 20,
                     'Tipo': 8,
                     'RFC Emisor': 15,
                     'Emisor': 30,
-                    'RFC Receptor': 15,
-                    'Receptor': 30,
                     'Descripción': 50,
                     'Cantidad': 10,
                     'Precio Unitario': 15,
                     'Importe': 15,
                     'Subtotal': 15,
                     'Total': 15,
-                    'Moneda': 10,
-                    'Método de Pago': 15
+                    'Moneda': 10
                 }
 
                 for idx, col in enumerate(df.columns):
@@ -306,17 +273,17 @@ else:
     ### ✨ Características:
     - ✅ Procesa múltiples archivos XML simultáneamente
     - ✅ Soporta CFDI v3.3 y v4.0
-    - ✅ Extrae UUID (identificador oficial SAT)
-    - ✅ Extrae datos completos (emisor, receptor, conceptos, totales)
+    - ✅ Extrae solo la información esencial
     - ✅ Genera Excel con formato profesional
     - ✅ Vista previa de los datos antes de descargar
     - ✅ Manejo automático de errores
 
     ### 📋 Información extraída:
-    - **UUID** - Identificador único fiscal (TimbreFiscalDigital)
-    - Folio, Serie, Fecha, Tipo de Comprobante
-    - RFC y nombre del Emisor
-    - RFC y nombre del Receptor
-    - Descripción, Cantidad, Precio Unitario, Importe
-    - Subtotal, Total, Moneda, Método de Pago
+    - **UUID** - Identificador único fiscal
+    - **Fecha** - Fecha de emisión
+    - **Tipo** - Tipo de comprobante (I, E, P, N)
+    - **RFC Emisor** y **Emisor** - Quien emite
+    - **Descripción** - Detalle del concepto
+    - **Cantidad**, **Precio Unitario**, **Importe**
+    - **Subtotal**, **Total**, **Moneda**
     """)
