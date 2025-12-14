@@ -5,73 +5,219 @@ from io import BytesIO
 from datetime import datetime
 
 st.set_page_config(
-    page_title="Extractor SAT XML → Excel",
+    page_title="Extractor SAT XML",
     page_icon="📊",
-    layout="centered",
+    layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# Estilos CSS personalizados
+# Estilos CSS modernos y minimalistas
 st.markdown("""
     <style>
+    /* Fuentes y colores principales */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+    * {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
     .main {
-        max-width: 800px;
+        max-width: 1400px;
         margin: 0 auto;
+        padding: 2rem 3rem;
     }
-    .header {
+
+    /* Header */
+    .header-container {
         text-align: center;
-        margin-bottom: 30px;
+        margin-bottom: 3rem;
+        padding-bottom: 2rem;
+        border-bottom: 1px solid #e5e7eb;
     }
-    .success-box {
-        background-color: #d4edda;
-        padding: 15px;
-        border-radius: 8px;
-        border-left: 4px solid #28a745;
-        margin: 10px 0;
+
+    .main-title {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: #111827;
+        margin-bottom: 0.5rem;
+        letter-spacing: -0.02em;
     }
-    .error-box {
-        background-color: #f8d7da;
-        padding: 15px;
-        border-radius: 8px;
-        border-left: 4px solid #dc3545;
-        margin: 10px 0;
+
+    .subtitle {
+        font-size: 1rem;
+        color: #6b7280;
+        font-weight: 400;
     }
-    .info-box {
-        background-color: #d1ecf1;
-        padding: 15px;
+
+    /* File uploader personalizado */
+    .uploadedFile {
+        border: 2px dashed #d1d5db !important;
+        border-radius: 12px !important;
+        padding: 2rem !important;
+        background: #f9fafb !important;
+        transition: all 0.3s ease;
+    }
+
+    .uploadedFile:hover {
+        border-color: #667eea !important;
+        background: #f3f4f6 !important;
+    }
+
+    /* Botones */
+    .stButton > button {
+        width: 100%;
+        padding: 0.75rem 1.5rem;
+        font-size: 0.95rem;
+        font-weight: 600;
         border-radius: 8px;
-        border-left: 4px solid #0c5460;
-        margin: 10px 0;
+        border: none;
+        transition: all 0.2s ease;
+        letter-spacing: 0.01em;
+    }
+
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+    }
+
+    .stButton > button[kind="primary"]:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+    }
+
+    .stButton > button[kind="secondary"] {
+        background: white;
+        color: #374151;
+        border: 1.5px solid #e5e7eb;
+    }
+
+    .stButton > button[kind="secondary"]:hover {
+        background: #f9fafb;
+        border-color: #d1d5db;
+    }
+
+    /* Mensajes de estado */
+    .status-success {
+        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        color: white;
+        padding: 1rem 1.5rem;
+        border-radius: 10px;
+        font-weight: 500;
+        margin: 1.5rem 0;
+        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2);
+    }
+
+    .status-info {
+        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+        color: white;
+        padding: 1rem 1.5rem;
+        border-radius: 10px;
+        font-weight: 500;
+        margin: 1.5rem 0;
+        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.2);
+    }
+
+    .status-warning {
+        background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+        color: white;
+        padding: 1rem 1.5rem;
+        border-radius: 10px;
+        font-weight: 500;
+        margin: 1.5rem 0;
+        box-shadow: 0 4px 12px rgba(245, 158, 11, 0.2);
+    }
+
+    .status-error {
+        background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+        color: white;
+        padding: 1rem 1.5rem;
+        border-radius: 10px;
+        font-weight: 500;
+        margin: 1.5rem 0;
+        box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
+    }
+
+    /* Tablas */
+    .dataframe {
+        font-size: 0.9rem !important;
+        border-radius: 8px !important;
+        overflow: hidden !important;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
+    }
+
+    /* Progress bar */
+    .stProgress > div > div > div {
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        border-radius: 10px;
+    }
+
+    /* Spinner */
+    .stSpinner > div {
+        border-top-color: #667eea !important;
+    }
+
+    /* Download button */
+    .stDownloadButton > button {
+        background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+        color: white !important;
+        font-weight: 600 !important;
+        padding: 0.75rem 1.5rem !important;
+        border-radius: 8px !important;
+        border: none !important;
+        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3) !important;
+        transition: all 0.2s ease !important;
+    }
+
+    .stDownloadButton > button:hover {
+        transform: translateY(-2px) !important;
+        box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4) !important;
+    }
+
+    /* Ocultar elementos innecesarios */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+
+    /* Card container */
+    .card {
+        background: white;
+        border-radius: 12px;
+        padding: 2rem;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        margin-bottom: 2rem;
     }
     </style>
     """, unsafe_allow_html=True)
 
-st.markdown('<div class="header"><h1>📊 Extractor SAT XML → Excel</h1><p>Convierte tus facturas XML del SAT a un archivo Excel con desglose de impuestos</p></div>', unsafe_allow_html=True)
+# Header
+st.markdown("""
+    <div class="header-container">
+        <h1 class="main-title">Extractor SAT XML</h1>
+        <p class="subtitle">Convierte tus facturas XML a Excel con desglose de impuestos</p>
+    </div>
+""", unsafe_allow_html=True)
 
 def parse_xml_invoice(xml_text):
     """Parsea un archivo XML de factura SAT y extrae los datos incluyendo impuestos"""
     try:
         root = ET.fromstring(xml_text)
 
-        # Namespaces para CFDI v3.3 y v4.0
         ns = {
             'cfdi': 'http://www.sat.gob.mx/cfd/4',
             'cfdi3': 'http://www.sat.gob.mx/cfd/3',
             'tfd': 'http://www.sat.gob.mx/TimbreFiscalDigital'
         }
 
-        # Datos principales del comprobante
         fecha = root.get('Fecha', '')
         total = root.get('Total', '0')
         subtotal = root.get('SubTotal', '0')
         moneda = root.get('Moneda', 'MXN')
         tipo_comprobante = root.get('TipoDeComprobante', '')
 
-        # Extraer UUID del TimbreFiscalDigital
         timbre = root.find('.//tfd:TimbreFiscalDigital', ns)
         uuid = timbre.get('UUID', '') if timbre is not None else ''
 
-        # Emisor
         emisor = root.find('cfdi:Emisor', ns)
         if emisor is None:
             emisor = root.find('cfdi3:Emisor', ns)
@@ -81,7 +227,6 @@ def parse_xml_invoice(xml_text):
         emisor_rfc = emisor.get('Rfc', '') if emisor is not None else ''
         emisor_nombre = emisor.get('Nombre', '') if emisor is not None else ''
 
-        # Conceptos (líneas de factura)
         conceptos = root.findall('cfdi:Conceptos/cfdi:Concepto', ns)
 
         if not conceptos:
@@ -93,7 +238,6 @@ def parse_xml_invoice(xml_text):
         invoices = []
 
         if len(conceptos) == 0:
-            # Si no hay conceptos, crear un registro único
             invoices.append({
                 'UUID': uuid,
                 'Fecha': fecha,
@@ -113,11 +257,9 @@ def parse_xml_invoice(xml_text):
                 'Moneda': moneda
             })
         else:
-            # Un registro por cada concepto
             for concepto in conceptos:
                 cantidad = concepto.get('Cantidad', '1')
 
-                # CFDI 4.0 usa ValorUnitario, CFDI 3.3 usa PrecioUnitario
                 precio_unitario = concepto.get('ValorUnitario', '')
                 if not precio_unitario:
                     precio_unitario = concepto.get('PrecioUnitario', '0')
@@ -125,7 +267,6 @@ def parse_xml_invoice(xml_text):
                 importe = concepto.get('Importe', '0')
                 descripcion = concepto.get('Descripcion', '')
 
-                # Extraer impuestos del concepto
                 iva_traslado = 0.0
                 isr_retenido = 0.0
                 iva_retenido = 0.0
@@ -138,7 +279,6 @@ def parse_xml_invoice(xml_text):
                     impuestos_concepto = concepto.find('Impuestos')
 
                 if impuestos_concepto is not None:
-                    # Traslados (IVA, IEPS)
                     traslados = impuestos_concepto.findall('cfdi:Traslados/cfdi:Traslado', ns)
                     if not traslados:
                         traslados = impuestos_concepto.findall('cfdi3:Traslados/cfdi3:Traslado', ns)
@@ -149,12 +289,11 @@ def parse_xml_invoice(xml_text):
                         impuesto_tipo = traslado.get('Impuesto', '')
                         importe_imp = float(traslado.get('Importe', '0'))
 
-                        if impuesto_tipo == '002':  # IVA
+                        if impuesto_tipo == '002':
                             iva_traslado += importe_imp
-                        elif impuesto_tipo == '003':  # IEPS
+                        elif impuesto_tipo == '003':
                             ieps += importe_imp
 
-                    # Retenciones (ISR, IVA)
                     retenciones = impuestos_concepto.findall('cfdi:Retenciones/cfdi:Retencion', ns)
                     if not retenciones:
                         retenciones = impuestos_concepto.findall('cfdi3:Retenciones/cfdi3:Retencion', ns)
@@ -165,9 +304,9 @@ def parse_xml_invoice(xml_text):
                         impuesto_tipo = retencion.get('Impuesto', '')
                         importe_imp = float(retencion.get('Importe', '0'))
 
-                        if impuesto_tipo == '001':  # ISR
+                        if impuesto_tipo == '001':
                             isr_retenido += importe_imp
-                        elif impuesto_tipo == '002':  # IVA
+                        elif impuesto_tipo == '002':
                             iva_retenido += importe_imp
 
                 invoices.append({
@@ -195,7 +334,7 @@ def parse_xml_invoice(xml_text):
         st.error(f"Error al parsear XML: {str(e)}")
         return None
     except Exception as e:
-        st.error(f"Error inesperado: {str(e)}")
+        st.error(f"Error: {str(e)}")
         return None
 
 def process_files(uploaded_files):
@@ -213,14 +352,14 @@ def process_files(uploaded_files):
 
             if invoices:
                 all_invoices.extend(invoices)
-                status_text.text(f"✅ Procesado: {uploaded_file.name}")
+                status_text.text(f"Procesado: {uploaded_file.name}")
             else:
-                errors.append(f"⚠️ {uploaded_file.name}: No se pudo extraer información")
+                errors.append(f"{uploaded_file.name}: No se pudo extraer información")
 
             progress_bar.progress((idx + 1) / len(uploaded_files))
 
         except Exception as e:
-            errors.append(f"❌ {uploaded_file.name}: {str(e)}")
+            errors.append(f"{uploaded_file.name}: {str(e)}")
 
     progress_bar.empty()
     status_text.empty()
@@ -229,52 +368,39 @@ def process_files(uploaded_files):
 
 # Interfaz principal
 uploaded_files = st.file_uploader(
-    "📁 Sube tus archivos XML del SAT",
+    "Seleccionar archivos XML",
     type=['xml'],
     accept_multiple_files=True,
-    help="Selecciona uno o más archivos XML de facturas"
+    help="Arrastra o selecciona múltiples archivos XML"
 )
 
 if uploaded_files:
-    st.markdown(f'<div class="info-box">📦 {len(uploaded_files)} archivo(s) seleccionado(s)</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="status-info">{len(uploaded_files)} archivo(s) seleccionado(s)</div>', unsafe_allow_html=True)
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns([2, 2, 1])
 
     with col1:
-        process_btn = st.button('🔄 Procesar y Descargar', use_container_width=True)
+        process_btn = st.button('Procesar y Descargar', type="primary", use_container_width=True)
 
     with col2:
-        preview_btn = st.button('👁️ Vista Previa', use_container_width=True)
+        preview_btn = st.button('Vista Previa', type="secondary", use_container_width=True)
 
     if process_btn:
-        with st.spinner('⏳ Procesando archivos...'):
+        with st.spinner('Procesando archivos...'):
             df, errors = process_files(uploaded_files)
 
         if df is not None and len(df) > 0:
-            # Descargar Excel
             output = BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df.to_excel(writer, sheet_name='Facturas', index=False)
 
-                # Ajustar ancho de columnas
                 worksheet = writer.sheets['Facturas']
                 column_widths = {
-                    'UUID': 40,
-                    'Fecha': 20,
-                    'Tipo': 8,
-                    'RFC Emisor': 15,
-                    'Emisor': 30,
-                    'Descripción': 50,
-                    'Cantidad': 10,
-                    'Precio Unitario': 15,
-                    'Importe': 12,
-                    'IVA': 12,
-                    'ISR Retenido': 15,
-                    'IVA Retenido': 15,
-                    'IEPS': 12,
-                    'Subtotal': 12,
-                    'Total': 12,
-                    'Moneda': 10
+                    'UUID': 40, 'Fecha': 20, 'Tipo': 8, 'RFC Emisor': 15,
+                    'Emisor': 30, 'Descripción': 50, 'Cantidad': 10,
+                    'Precio Unitario': 15, 'Importe': 12, 'IVA': 12,
+                    'ISR Retenido': 15, 'IVA Retenido': 15, 'IEPS': 12,
+                    'Subtotal': 12, 'Total': 12, 'Moneda': 10
                 }
 
                 for idx, col in enumerate(df.columns):
@@ -284,10 +410,10 @@ if uploaded_files:
 
             output.seek(0)
 
-            st.markdown(f'<div class="success-box">✅ Éxito: {len(df)} registros procesados de {df["UUID"].nunique()} facturas</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="status-success">{len(df)} registros procesados de {df["UUID"].nunique()} facturas</div>', unsafe_allow_html=True)
 
             st.download_button(
-                label="📥 Descargar Excel",
+                label="Descargar Excel",
                 data=output.getvalue(),
                 file_name=f"Facturas_SAT_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -295,11 +421,12 @@ if uploaded_files:
             )
 
             if errors:
-                st.warning("⚠️ Algunos archivos tuvieron problemas:")
-                for error in errors:
-                    st.text(error)
+                st.markdown(f'<div class="status-warning">Advertencias: {len(errors)} archivo(s) con problemas</div>', unsafe_allow_html=True)
+                with st.expander("Ver detalles"):
+                    for error in errors:
+                        st.text(error)
         else:
-            st.markdown('<div class="error-box">❌ No se encontraron facturas válidas en los archivos</div>', unsafe_allow_html=True)
+            st.markdown('<div class="status-error">No se encontraron facturas válidas</div>', unsafe_allow_html=True)
             if errors:
                 for error in errors:
                     st.error(error)
@@ -308,48 +435,13 @@ if uploaded_files:
         df, errors = process_files(uploaded_files)
 
         if df is not None and len(df) > 0:
-            st.markdown("### 👁️ Vista Previa (primeros 5 registros)")
-            st.dataframe(df.head(), use_container_width=True)
-            st.markdown(f"**Total de registros:** {len(df)} | **Facturas únicas:** {df['UUID'].nunique()}")
+            st.markdown("### Vista Previa")
+            st.dataframe(df.head(10), use_container_width=True, height=400)
+            st.caption(f"Mostrando primeros 10 de {len(df)} registros | {df['UUID'].nunique()} facturas únicas")
 
             if errors:
-                st.warning("⚠️ Advertencias:")
-                for error in errors:
-                    st.text(error)
+                with st.expander("Advertencias"):
+                    for error in errors:
+                        st.text(error)
         else:
-            st.markdown('<div class="error-box">❌ Error al procesar archivos</div>', unsafe_allow_html=True)
-
-else:
-    st.markdown("""
-    ### 🚀 Cómo usar:
-
-    1. **Carga tus XMLs**: Haz clic en el área de carga o arrastra tus archivos XML
-    2. **Procesa**: Click en "Procesar y Descargar" para generar el Excel
-    3. **Descarga**: El archivo Excel se descargará automáticamente
-
-    ### ✨ Características:
-    - ✅ Procesa múltiples archivos XML simultáneamente
-    - ✅ Soporta CFDI v3.3 y v4.0
-    - ✅ **Desglose completo de impuestos** (IVA, ISR, IEPS)
-    - ✅ Extrae información esencial
-    - ✅ Genera Excel con formato profesional
-    - ✅ Vista previa de los datos antes de descargar
-    - ✅ Manejo automático de errores
-
-    ### 📋 Información extraída:
-    - **UUID** - Identificador único fiscal
-    - **Fecha** - Fecha de emisión
-    - **Tipo** - Tipo de comprobante (I, E, P, N)
-    - **RFC Emisor** y **Emisor** - Quien emite
-    - **Descripción** - Detalle del concepto
-    - **Cantidad**, **Precio Unitario**, **Importe**
-    - **IVA** - IVA trasladado (16%)
-    - **ISR Retenido** - ISR retenido si aplica
-    - **IVA Retenido** - IVA retenido si aplica
-    - **IEPS** - Impuesto especial si aplica
-    - **Subtotal**, **Total**, **Moneda**
-
-    ### 💡 Tipos de impuestos:
-    - **Traslados**: IVA (16%), IEPS
-    - **Retenciones**: ISR (10%), IVA Retenido (10.67%)
-    """)
+            st.markdown('<div class="status-error">Error al procesar archivos</div>', unsafe_allow_html=True)
