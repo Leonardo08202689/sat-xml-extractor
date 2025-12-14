@@ -5,8 +5,8 @@ from io import BytesIO
 from datetime import datetime
 
 st.set_page_config(
-    page_title="Extractor SAT XML",
-    page_icon="📊",
+    page_title="EXTRACTOR DE INFO FACTURAS. SOLO FORMATO XML",
+    page_icon="",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -194,7 +194,7 @@ st.markdown("""
 st.markdown("""
     <div class="header-container">
         <h1 class="main-title">Extractor SAT XML</h1>
-        <p class="subtitle">Convierte tus facturas XML a Excel con desglose de impuestos</p>
+        <p class="subtitle">Convierte tus facturas XML a Excel</p>
     </div>
 """, unsafe_allow_html=True)
 
