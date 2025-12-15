@@ -5,7 +5,7 @@ from io import BytesIO
 from datetime import datetime
 
 st.set_page_config(
-    page_title="Extractor SAT XML",
+    page_title="Extraer datos de facturas",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -173,8 +173,8 @@ st.markdown("""
 
 st.markdown("""
     <div class="header-container">
-        <h1 class="main-title">Extractor SAT XML</h1>
-        <p class="subtitle">Convierte tus facturas XML a Excel con desglose de impuestos</p>
+        <h1 class="main-title">Extractor XML</h1>
+        <p class="subtitle">Convierte las facturas XML a Excel</p>
     </div>
 """, unsafe_allow_html=True)
 
@@ -331,7 +331,16 @@ def process_files(uploaded_files):
     progress_bar.empty()
     status_text.empty()
 
-    return pd.DataFrame(all_invoices) if all_invoices else None, errors
+    if all_invoices:
+        df = pd.DataFrame(all_invoices)
+        # ORDENAR POR FECHA (de más antigua a más reciente)
+        df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
+        df = df.sort_values('Fecha').reset_index(drop=True)
+        # Convertir fecha a string para Excel
+        df['Fecha'] = df['Fecha'].dt.strftime('%Y-%m-%d %H:%M:%S')
+        return df, errors
+
+    return None, errors
 
 uploaded_files = st.file_uploader(
     "Seleccionar archivos XML",
@@ -376,7 +385,7 @@ if uploaded_files:
 
             output.seek(0)
 
-            st.markdown(f'<div class="status-success">{len(df)} factura(s) procesada(s)</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="status-success">{len(df)} factura(s) procesada(s) y ordenada(s) cronológicamente</div>', unsafe_allow_html=True)
 
             st.download_button(
                 label="Descargar Excel",
@@ -401,7 +410,7 @@ if uploaded_files:
         df, errors = process_files(uploaded_files)
 
         if df is not None and len(df) > 0:
-            st.markdown("### Vista Previa")
+            st.markdown("### Vista Previa (Ordenada cronológicamente)")
             st.dataframe(df.head(10), use_container_width=True, height=400)
             st.caption(f"Mostrando primeros 10 de {len(df)} facturas")
 
