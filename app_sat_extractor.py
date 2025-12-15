@@ -5,8 +5,8 @@ from io import BytesIO
 from datetime import datetime
 
 st.set_page_config(
-    page_title="EXTRACTOR DE INFO FACTURAS. SOLO FORMATO XML",
-    page_icon="",
+    page_title="Extractor SAT XML",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -178,15 +178,6 @@ st.markdown("""
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
-
-    /* Card container */
-    .card {
-        background: white;
-        border-radius: 12px;
-        padding: 2rem;
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-        margin-bottom: 2rem;
-    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -194,141 +185,125 @@ st.markdown("""
 st.markdown("""
     <div class="header-container">
         <h1 class="main-title">Extractor SAT XML</h1>
-        <p class="subtitle">Convierte tus facturas XML a Excel</p>
+        <p class="subtitle">Convierte tus facturas XML a Excel con desglose de impuestos</p>
     </div>
 """, unsafe_allow_html=True)
 
-def parse_xml_invoice(xml_text):
-    """Parsea un archivo XML de factura SAT y extrae los datos incluyendo impuestos"""
+# Namespaces
+NS = {
+    'cfdi': 'http://www.sat.gob.mx/cfd/4',
+    'cfdi3': 'http://www.sat.gob.mx/cfd/3',
+    'tfd': 'http://www.sat.gob.mx/TimbreFiscalDigital'
+}
+
+def parse_xml_invoice_one_row(xml_text):
+    """Parsea un XML y devuelve UNA fila por factura con totales agregados"""
     try:
         root = ET.fromstring(xml_text)
 
-        ns = {
-            'cfdi': 'http://www.sat.gob.mx/cfd/4',
-            'cfdi3': 'http://www.sat.gob.mx/cfd/3',
-            'tfd': 'http://www.sat.gob.mx/TimbreFiscalDigital'
-        }
-
+        # Datos principales del comprobante
         fecha = root.get('Fecha', '')
-        total = root.get('Total', '0')
-        subtotal = root.get('SubTotal', '0')
+        total = float(root.get('Total', '0') or 0)
+        subtotal = float(root.get('SubTotal', '0') or 0)
         moneda = root.get('Moneda', 'MXN')
         tipo_comprobante = root.get('TipoDeComprobante', '')
 
-        timbre = root.find('.//tfd:TimbreFiscalDigital', ns)
+        # UUID
+        timbre = root.find('.//tfd:TimbreFiscalDigital', NS)
         uuid = timbre.get('UUID', '') if timbre is not None else ''
 
-        emisor = root.find('cfdi:Emisor', ns)
-        if emisor is None:
-            emisor = root.find('cfdi3:Emisor', ns)
-        if emisor is None:
-            emisor = root.find('Emisor')
-
+        # Emisor
+        emisor = (root.find('cfdi:Emisor', NS) 
+                  or root.find('cfdi3:Emisor', NS) 
+                  or root.find('Emisor'))
         emisor_rfc = emisor.get('Rfc', '') if emisor is not None else ''
         emisor_nombre = emisor.get('Nombre', '') if emisor is not None else ''
 
-        conceptos = root.findall('cfdi:Conceptos/cfdi:Concepto', ns)
+        # Conceptos
+        conceptos = (root.findall('cfdi:Conceptos/cfdi:Concepto', NS)
+                     or root.findall('cfdi3:Conceptos/cfdi3:Concepto', NS)
+                     or root.findall('.//Concepto'))
 
-        if not conceptos:
-            conceptos = root.findall('cfdi3:Conceptos/cfdi3:Concepto', ns)
+        # Variables para acumular
+        total_cantidad = 0.0
+        total_importe = 0.0
+        iva_traslado = 0.0
+        isr_retenido = 0.0
+        iva_retenido = 0.0
+        ieps = 0.0
+        descripciones = []
 
-        if not conceptos:
-            conceptos = root.findall('.//Concepto')
+        for concepto in conceptos:
+            cantidad = float(concepto.get('Cantidad', '0') or 0)
 
-        invoices = []
+            # Valor unitario (CFDI 4.0) o precio unitario (CFDI 3.3)
+            precio_unitario = concepto.get('ValorUnitario', '')
+            if not precio_unitario:
+                precio_unitario = concepto.get('PrecioUnitario', '0')
 
-        if len(conceptos) == 0:
-            invoices.append({
-                'UUID': uuid,
-                'Fecha': fecha,
-                'Tipo': tipo_comprobante,
-                'RFC Emisor': emisor_rfc,
-                'Emisor': emisor_nombre,
-                'Descripción': '',
-                'Cantidad': '',
-                'Precio Unitario': '',
-                'Importe': '',
-                'IVA': '',
-                'ISR Retenido': '',
-                'IVA Retenido': '',
-                'IEPS': '',
-                'Subtotal': subtotal,
-                'Total': total,
-                'Moneda': moneda
-            })
-        else:
-            for concepto in conceptos:
-                cantidad = concepto.get('Cantidad', '1')
+            importe = float(concepto.get('Importe', '0') or 0)
+            desc = concepto.get('Descripcion', '')
 
-                precio_unitario = concepto.get('ValorUnitario', '')
-                if not precio_unitario:
-                    precio_unitario = concepto.get('PrecioUnitario', '0')
+            if desc:
+                descripciones.append(desc)
 
-                importe = concepto.get('Importe', '0')
-                descripcion = concepto.get('Descripcion', '')
+            total_cantidad += cantidad
+            total_importe += importe
 
-                iva_traslado = 0.0
-                isr_retenido = 0.0
-                iva_retenido = 0.0
-                ieps = 0.0
+            # Extraer impuestos del concepto
+            impuestos_concepto = (concepto.find('cfdi:Impuestos', NS)
+                                  or concepto.find('cfdi3:Impuestos', NS)
+                                  or concepto.find('Impuestos'))
 
-                impuestos_concepto = concepto.find('cfdi:Impuestos', ns)
-                if impuestos_concepto is None:
-                    impuestos_concepto = concepto.find('cfdi3:Impuestos', ns)
-                if impuestos_concepto is None:
-                    impuestos_concepto = concepto.find('Impuestos')
+            if impuestos_concepto is not None:
+                # Traslados (IVA, IEPS)
+                traslados = (impuestos_concepto.findall('cfdi:Traslados/cfdi:Traslado', NS)
+                             or impuestos_concepto.findall('cfdi3:Traslados/cfdi3:Traslado', NS)
+                             or impuestos_concepto.findall('.//Traslado'))
 
-                if impuestos_concepto is not None:
-                    traslados = impuestos_concepto.findall('cfdi:Traslados/cfdi:Traslado', ns)
-                    if not traslados:
-                        traslados = impuestos_concepto.findall('cfdi3:Traslados/cfdi3:Traslado', ns)
-                    if not traslados:
-                        traslados = impuestos_concepto.findall('.//Traslado')
+                for traslado in traslados:
+                    impuesto_tipo = traslado.get('Impuesto', '')
+                    importe_imp = float(traslado.get('Importe', '0') or 0)
 
-                    for traslado in traslados:
-                        impuesto_tipo = traslado.get('Impuesto', '')
-                        importe_imp = float(traslado.get('Importe', '0'))
+                    if impuesto_tipo == '002':  # IVA
+                        iva_traslado += importe_imp
+                    elif impuesto_tipo == '003':  # IEPS
+                        ieps += importe_imp
 
-                        if impuesto_tipo == '002':
-                            iva_traslado += importe_imp
-                        elif impuesto_tipo == '003':
-                            ieps += importe_imp
+                # Retenciones (ISR, IVA)
+                retenciones = (impuestos_concepto.findall('cfdi:Retenciones/cfdi:Retencion', NS)
+                               or impuestos_concepto.findall('cfdi3:Retenciones/cfdi3:Retencion', NS)
+                               or impuestos_concepto.findall('.//Retencion'))
 
-                    retenciones = impuestos_concepto.findall('cfdi:Retenciones/cfdi:Retencion', ns)
-                    if not retenciones:
-                        retenciones = impuestos_concepto.findall('cfdi3:Retenciones/cfdi3:Retencion', ns)
-                    if not retenciones:
-                        retenciones = impuestos_concepto.findall('.//Retencion')
+                for retencion in retenciones:
+                    impuesto_tipo = retencion.get('Impuesto', '')
+                    importe_imp = float(retencion.get('Importe', '0') or 0)
 
-                    for retencion in retenciones:
-                        impuesto_tipo = retencion.get('Impuesto', '')
-                        importe_imp = float(retencion.get('Importe', '0'))
+                    if impuesto_tipo == '001':  # ISR
+                        isr_retenido += importe_imp
+                    elif impuesto_tipo == '002':  # IVA
+                        iva_retenido += importe_imp
 
-                        if impuesto_tipo == '001':
-                            isr_retenido += importe_imp
-                        elif impuesto_tipo == '002':
-                            iva_retenido += importe_imp
+        # Concatenar descripciones
+        descripcion_resumen = ' | '.join(descripciones) if descripciones else ''
 
-                invoices.append({
-                    'UUID': uuid,
-                    'Fecha': fecha,
-                    'Tipo': tipo_comprobante,
-                    'RFC Emisor': emisor_rfc,
-                    'Emisor': emisor_nombre,
-                    'Descripción': descripcion,
-                    'Cantidad': cantidad,
-                    'Precio Unitario': precio_unitario,
-                    'Importe': importe,
-                    'IVA': f"{iva_traslado:.2f}" if iva_traslado > 0 else '0.00',
-                    'ISR Retenido': f"{isr_retenido:.2f}" if isr_retenido > 0 else '0.00',
-                    'IVA Retenido': f"{iva_retenido:.2f}" if iva_retenido > 0 else '0.00',
-                    'IEPS': f"{ieps:.2f}" if ieps > 0 else '0.00',
-                    'Subtotal': subtotal,
-                    'Total': total,
-                    'Moneda': moneda
-                })
-
-        return invoices
+        return {
+            'UUID': uuid,
+            'Fecha': fecha,
+            'Tipo': tipo_comprobante,
+            'RFC Emisor': emisor_rfc,
+            'Emisor': emisor_nombre,
+            'Descripcion': descripcion_resumen,
+            'Cantidad': total_cantidad,
+            'Importe': round(total_importe, 2),
+            'IVA': round(iva_traslado, 2),
+            'ISR Retenido': round(isr_retenido, 2),
+            'IVA Retenido': round(iva_retenido, 2),
+            'IEPS': round(ieps, 2),
+            'Subtotal': subtotal,
+            'Total': total,
+            'Moneda': moneda
+        }
 
     except ET.ParseError as e:
         st.error(f"Error al parsear XML: {str(e)}")
@@ -338,7 +313,7 @@ def parse_xml_invoice(xml_text):
         return None
 
 def process_files(uploaded_files):
-    """Procesa múltiples archivos XML y retorna un DataFrame consolidado"""
+    """Procesa múltiples archivos XML - una fila por factura"""
     all_invoices = []
     errors = []
 
@@ -347,11 +322,11 @@ def process_files(uploaded_files):
 
     for idx, uploaded_file in enumerate(uploaded_files):
         try:
-            xml_content = uploaded_file.read().decode('utf-8')
-            invoices = parse_xml_invoice(xml_content)
+            xml_content = uploaded_file.read().decode('utf-8', errors='ignore')
+            invoice = parse_xml_invoice_one_row(xml_content)
 
-            if invoices:
-                all_invoices.extend(invoices)
+            if invoice:
+                all_invoices.append(invoice)
                 status_text.text(f"Procesado: {uploaded_file.name}")
             else:
                 errors.append(f"{uploaded_file.name}: No se pudo extraer información")
@@ -396,11 +371,21 @@ if uploaded_files:
 
                 worksheet = writer.sheets['Facturas']
                 column_widths = {
-                    'UUID': 40, 'Fecha': 20, 'Tipo': 8, 'RFC Emisor': 15,
-                    'Emisor': 30, 'Descripción': 50, 'Cantidad': 10,
-                    'Precio Unitario': 15, 'Importe': 12, 'IVA': 12,
-                    'ISR Retenido': 15, 'IVA Retenido': 15, 'IEPS': 12,
-                    'Subtotal': 12, 'Total': 12, 'Moneda': 10
+                    'UUID': 40,
+                    'Fecha': 20,
+                    'Tipo': 8,
+                    'RFC Emisor': 15,
+                    'Emisor': 30,
+                    'Descripcion': 60,
+                    'Cantidad': 12,
+                    'Importe': 12,
+                    'IVA': 12,
+                    'ISR Retenido': 15,
+                    'IVA Retenido': 15,
+                    'IEPS': 12,
+                    'Subtotal': 12,
+                    'Total': 12,
+                    'Moneda': 10
                 }
 
                 for idx, col in enumerate(df.columns):
@@ -410,7 +395,7 @@ if uploaded_files:
 
             output.seek(0)
 
-            st.markdown(f'<div class="status-success">{len(df)} registros procesados de {df["UUID"].nunique()} facturas</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="status-success">{len(df)} factura(s) procesada(s)</div>', unsafe_allow_html=True)
 
             st.download_button(
                 label="Descargar Excel",
@@ -437,7 +422,7 @@ if uploaded_files:
         if df is not None and len(df) > 0:
             st.markdown("### Vista Previa")
             st.dataframe(df.head(10), use_container_width=True, height=400)
-            st.caption(f"Mostrando primeros 10 de {len(df)} registros | {df['UUID'].nunique()} facturas únicas")
+            st.caption(f"Mostrando primeros 10 de {len(df)} facturas")
 
             if errors:
                 with st.expander("Advertencias"):
