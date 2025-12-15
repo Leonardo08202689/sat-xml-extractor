@@ -14,7 +14,6 @@ st.set_page_config(
 # Estilos CSS modernos y minimalistas
 st.markdown("""
     <style>
-    /* Fuentes y colores principales */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
     * {
@@ -27,7 +26,6 @@ st.markdown("""
         padding: 2rem 3rem;
     }
 
-    /* Header */
     .header-container {
         text-align: center;
         margin-bottom: 3rem;
@@ -49,7 +47,6 @@ st.markdown("""
         font-weight: 400;
     }
 
-    /* File uploader personalizado */
     .uploadedFile {
         border: 2px dashed #d1d5db !important;
         border-radius: 12px !important;
@@ -63,7 +60,6 @@ st.markdown("""
         background: #f3f4f6 !important;
     }
 
-    /* Botones */
     .stButton > button {
         width: 100%;
         padding: 0.75rem 1.5rem;
@@ -97,7 +93,6 @@ st.markdown("""
         border-color: #d1d5db;
     }
 
-    /* Mensajes de estado */
     .status-success {
         background: linear-gradient(135deg, #10b981 0%, #059669 100%);
         color: white;
@@ -138,7 +133,6 @@ st.markdown("""
         box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
     }
 
-    /* Tablas */
     .dataframe {
         font-size: 0.9rem !important;
         border-radius: 8px !important;
@@ -146,18 +140,15 @@ st.markdown("""
         box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
     }
 
-    /* Progress bar */
     .stProgress > div > div > div {
         background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
         border-radius: 10px;
     }
 
-    /* Spinner */
     .stSpinner > div {
         border-top-color: #667eea !important;
     }
 
-    /* Download button */
     .stDownloadButton > button {
         background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
         color: white !important;
@@ -174,14 +165,12 @@ st.markdown("""
         box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4) !important;
     }
 
-    /* Ocultar elementos innecesarios */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
     </style>
     """, unsafe_allow_html=True)
 
-# Header
 st.markdown("""
     <div class="header-container">
         <h1 class="main-title">Extractor SAT XML</h1>
@@ -189,7 +178,6 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-# Namespaces
 NS = {
     'cfdi': 'http://www.sat.gob.mx/cfd/4',
     'cfdi3': 'http://www.sat.gob.mx/cfd/3',
@@ -201,7 +189,7 @@ def parse_xml_invoice_one_row(xml_text):
     try:
         root = ET.fromstring(xml_text)
 
-        # Datos principales del comprobante
+        # Datos principales
         fecha = root.get('Fecha', '')
         total = float(root.get('Total', '0') or 0)
         subtotal = float(root.get('SubTotal', '0') or 0)
@@ -212,19 +200,27 @@ def parse_xml_invoice_one_row(xml_text):
         timbre = root.find('.//tfd:TimbreFiscalDigital', NS)
         uuid = timbre.get('UUID', '') if timbre is not None else ''
 
-        # Emisor
-        emisor = (root.find('cfdi:Emisor', NS) 
-                  or root.find('cfdi3:Emisor', NS) 
-                  or root.find('Emisor'))
-        emisor_rfc = emisor.get('Rfc', '') if emisor is not None else ''
-        emisor_nombre = emisor.get('Nombre', '') if emisor is not None else ''
+        # Emisor - intentar con ambos namespaces
+        emisor = root.find('cfdi:Emisor', NS)
+        if emisor is None:
+            emisor = root.find('cfdi3:Emisor', NS)
+        if emisor is None:
+            emisor = root.find('Emisor')
 
-        # Conceptos
-        conceptos = (root.findall('cfdi:Conceptos/cfdi:Concepto', NS)
-                     or root.findall('cfdi3:Conceptos/cfdi3:Concepto', NS)
-                     or root.findall('.//Concepto'))
+        emisor_rfc = ''
+        emisor_nombre = ''
+        if emisor is not None:
+            emisor_rfc = emisor.get('Rfc', '')
+            emisor_nombre = emisor.get('Nombre', '')
 
-        # Variables para acumular
+        # Conceptos - intentar con ambos namespaces
+        conceptos = root.findall('cfdi:Conceptos/cfdi:Concepto', NS)
+        if not conceptos:
+            conceptos = root.findall('cfdi3:Conceptos/cfdi3:Concepto', NS)
+        if not conceptos:
+            conceptos = root.findall('.//Concepto')
+
+        # Variables acumuladoras
         total_cantidad = 0.0
         total_importe = 0.0
         iva_traslado = 0.0
@@ -235,12 +231,6 @@ def parse_xml_invoice_one_row(xml_text):
 
         for concepto in conceptos:
             cantidad = float(concepto.get('Cantidad', '0') or 0)
-
-            # Valor unitario (CFDI 4.0) o precio unitario (CFDI 3.3)
-            precio_unitario = concepto.get('ValorUnitario', '')
-            if not precio_unitario:
-                precio_unitario = concepto.get('PrecioUnitario', '0')
-
             importe = float(concepto.get('Importe', '0') or 0)
             desc = concepto.get('Descripcion', '')
 
@@ -250,41 +240,46 @@ def parse_xml_invoice_one_row(xml_text):
             total_cantidad += cantidad
             total_importe += importe
 
-            # Extraer impuestos del concepto
-            impuestos_concepto = (concepto.find('cfdi:Impuestos', NS)
-                                  or concepto.find('cfdi3:Impuestos', NS)
-                                  or concepto.find('Impuestos'))
+            # Impuestos del concepto
+            impuestos_concepto = concepto.find('cfdi:Impuestos', NS)
+            if impuestos_concepto is None:
+                impuestos_concepto = concepto.find('cfdi3:Impuestos', NS)
+            if impuestos_concepto is None:
+                impuestos_concepto = concepto.find('Impuestos')
 
             if impuestos_concepto is not None:
-                # Traslados (IVA, IEPS)
-                traslados = (impuestos_concepto.findall('cfdi:Traslados/cfdi:Traslado', NS)
-                             or impuestos_concepto.findall('cfdi3:Traslados/cfdi3:Traslado', NS)
-                             or impuestos_concepto.findall('.//Traslado'))
+                # Traslados
+                traslados = impuestos_concepto.findall('cfdi:Traslados/cfdi:Traslado', NS)
+                if not traslados:
+                    traslados = impuestos_concepto.findall('cfdi3:Traslados/cfdi3:Traslado', NS)
+                if not traslados:
+                    traslados = impuestos_concepto.findall('.//Traslado')
 
                 for traslado in traslados:
                     impuesto_tipo = traslado.get('Impuesto', '')
                     importe_imp = float(traslado.get('Importe', '0') or 0)
 
-                    if impuesto_tipo == '002':  # IVA
+                    if impuesto_tipo == '002':
                         iva_traslado += importe_imp
-                    elif impuesto_tipo == '003':  # IEPS
+                    elif impuesto_tipo == '003':
                         ieps += importe_imp
 
-                # Retenciones (ISR, IVA)
-                retenciones = (impuestos_concepto.findall('cfdi:Retenciones/cfdi:Retencion', NS)
-                               or impuestos_concepto.findall('cfdi3:Retenciones/cfdi3:Retencion', NS)
-                               or impuestos_concepto.findall('.//Retencion'))
+                # Retenciones
+                retenciones = impuestos_concepto.findall('cfdi:Retenciones/cfdi:Retencion', NS)
+                if not retenciones:
+                    retenciones = impuestos_concepto.findall('cfdi3:Retenciones/cfdi3:Retencion', NS)
+                if not retenciones:
+                    retenciones = impuestos_concepto.findall('.//Retencion')
 
                 for retencion in retenciones:
                     impuesto_tipo = retencion.get('Impuesto', '')
                     importe_imp = float(retencion.get('Importe', '0') or 0)
 
-                    if impuesto_tipo == '001':  # ISR
+                    if impuesto_tipo == '001':
                         isr_retenido += importe_imp
-                    elif impuesto_tipo == '002':  # IVA
+                    elif impuesto_tipo == '002':
                         iva_retenido += importe_imp
 
-        # Concatenar descripciones
         descripcion_resumen = ' | '.join(descripciones) if descripciones else ''
 
         return {
@@ -305,11 +300,8 @@ def parse_xml_invoice_one_row(xml_text):
             'Moneda': moneda
         }
 
-    except ET.ParseError as e:
-        st.error(f"Error al parsear XML: {str(e)}")
-        return None
     except Exception as e:
-        st.error(f"Error: {str(e)}")
+        st.error(f"Error al procesar XML: {str(e)}")
         return None
 
 def process_files(uploaded_files):
@@ -341,7 +333,6 @@ def process_files(uploaded_files):
 
     return pd.DataFrame(all_invoices) if all_invoices else None, errors
 
-# Interfaz principal
 uploaded_files = st.file_uploader(
     "Seleccionar archivos XML",
     type=['xml'],
@@ -371,21 +362,11 @@ if uploaded_files:
 
                 worksheet = writer.sheets['Facturas']
                 column_widths = {
-                    'UUID': 40,
-                    'Fecha': 20,
-                    'Tipo': 8,
-                    'RFC Emisor': 15,
-                    'Emisor': 30,
-                    'Descripcion': 60,
-                    'Cantidad': 12,
-                    'Importe': 12,
-                    'IVA': 12,
-                    'ISR Retenido': 15,
-                    'IVA Retenido': 15,
-                    'IEPS': 12,
-                    'Subtotal': 12,
-                    'Total': 12,
-                    'Moneda': 10
+                    'UUID': 40, 'Fecha': 20, 'Tipo': 8, 'RFC Emisor': 15,
+                    'Emisor': 35, 'Descripcion': 60, 'Cantidad': 12,
+                    'Importe': 12, 'IVA': 12, 'ISR Retenido': 15,
+                    'IVA Retenido': 15, 'IEPS': 12, 'Subtotal': 12,
+                    'Total': 12, 'Moneda': 10
                 }
 
                 for idx, col in enumerate(df.columns):
