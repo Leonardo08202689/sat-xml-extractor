@@ -5,7 +5,7 @@ from io import BytesIO
 from datetime import datetime
 
 st.set_page_config(
-    page_title="Extraer datos de facturas",
+    page_title="Extractor SAT XML",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -173,34 +173,35 @@ st.markdown("""
 
 st.markdown("""
     <div class="header-container">
-        <h1 class="main-title">Extractor XML</h1>
-        <p class="subtitle">Convierte las facturas XML a Excel</p>
+        <h1 class="main-title">Extractor SAT XML</h1>
+        <p class="subtitle">Convierte tus facturas y pagos XML a Excel con desglose de impuestos</p>
     </div>
 """, unsafe_allow_html=True)
 
 NS = {
     'cfdi': 'http://www.sat.gob.mx/cfd/4',
     'cfdi3': 'http://www.sat.gob.mx/cfd/3',
-    'tfd': 'http://www.sat.gob.mx/TimbreFiscalDigital'
+    'tfd': 'http://www.sat.gob.mx/TimbreFiscalDigital',
+    'pago20': 'http://www.sat.gob.mx/Pagos20'
 }
 
+# ============= PARSERS PARA FACTURAS =============
+
 def parse_xml_invoice_one_row(xml_text):
-    """Parsea un XML y devuelve UNA fila por factura con totales agregados"""
+    """Parsea un XML de factura y devuelve UNA fila por factura"""
     try:
         root = ET.fromstring(xml_text)
 
-        # Datos principales
         fecha = root.get('Fecha', '')
         total = float(root.get('Total', '0') or 0)
         subtotal = float(root.get('SubTotal', '0') or 0)
         moneda = root.get('Moneda', 'MXN')
         tipo_comprobante = root.get('TipoDeComprobante', '')
 
-        # UUID
         timbre = root.find('.//tfd:TimbreFiscalDigital', NS)
         uuid = timbre.get('UUID', '') if timbre is not None else ''
 
-        # Emisor - intentar con ambos namespaces
+        # Emisor
         emisor = root.find('cfdi:Emisor', NS)
         if emisor is None:
             emisor = root.find('cfdi3:Emisor', NS)
@@ -213,14 +214,13 @@ def parse_xml_invoice_one_row(xml_text):
             emisor_rfc = emisor.get('Rfc', '')
             emisor_nombre = emisor.get('Nombre', '')
 
-        # Conceptos - intentar con ambos namespaces
+        # Conceptos
         conceptos = root.findall('cfdi:Conceptos/cfdi:Concepto', NS)
         if not conceptos:
             conceptos = root.findall('cfdi3:Conceptos/cfdi3:Concepto', NS)
         if not conceptos:
             conceptos = root.findall('.//Concepto')
 
-        # Variables acumuladoras
         total_cantidad = 0.0
         total_importe = 0.0
         iva_traslado = 0.0
@@ -240,7 +240,6 @@ def parse_xml_invoice_one_row(xml_text):
             total_cantidad += cantidad
             total_importe += importe
 
-            # Impuestos del concepto
             impuestos_concepto = concepto.find('cfdi:Impuestos', NS)
             if impuestos_concepto is None:
                 impuestos_concepto = concepto.find('cfdi3:Impuestos', NS)
@@ -248,7 +247,6 @@ def parse_xml_invoice_one_row(xml_text):
                 impuestos_concepto = concepto.find('Impuestos')
 
             if impuestos_concepto is not None:
-                # Traslados
                 traslados = impuestos_concepto.findall('cfdi:Traslados/cfdi:Traslado', NS)
                 if not traslados:
                     traslados = impuestos_concepto.findall('cfdi3:Traslados/cfdi3:Traslado', NS)
@@ -264,7 +262,6 @@ def parse_xml_invoice_one_row(xml_text):
                     elif impuesto_tipo == '003':
                         ieps += importe_imp
 
-                # Retenciones
                 retenciones = impuestos_concepto.findall('cfdi:Retenciones/cfdi:Retencion', NS)
                 if not retenciones:
                     retenciones = impuestos_concepto.findall('cfdi3:Retenciones/cfdi3:Retencion', NS)
@@ -301,11 +298,85 @@ def parse_xml_invoice_one_row(xml_text):
         }
 
     except Exception as e:
-        st.error(f"Error al procesar XML: {str(e)}")
         return None
 
-def process_files(uploaded_files):
-    """Procesa múltiples archivos XML - una fila por factura"""
+# ============= PARSERS PARA PAGOS =============
+
+def parse_xml_payment(xml_text):
+    """Parsea un XML de pago (Comprobante de Pago con complemento pago20)"""
+    try:
+        root = ET.fromstring(xml_text)
+
+        # Datos principales del comprobante
+        fecha_comprobante = root.get('Fecha', '')
+        folio_comprobante = root.get('Folio', '')
+
+        # Receptor
+        receptor = root.find('cfdi:Receptor', NS)
+        if receptor is None:
+            receptor = root.find('Receptor')
+
+        receptor_rfc = ''
+        receptor_nombre = ''
+        if receptor is not None:
+            receptor_rfc = receptor.get('Rfc', '')
+            receptor_nombre = receptor.get('Nombre', '')
+
+        # Buscar el complemento de pagos
+        pagos = root.find('.//pago20:Pagos', NS)
+        if pagos is None:
+            pagos = root.find('.//Pagos')
+
+        rows = []
+
+        if pagos is not None:
+            # Iterar sobre cada pago (Pago)
+            pago_list = pagos.findall('pago20:Pago', NS)
+            if not pago_list:
+                pago_list = pagos.findall('.//Pago')
+
+            for pago in pago_list:
+                fecha_pago = pago.get('FechaPago', '')
+                monto_pago = float(pago.get('Monto', '0') or 0)
+
+                # Buscar documentos relacionados dentro de este pago
+                doc_relacionados = pago.findall('pago20:DoctoRelacionado', NS)
+                if not doc_relacionados:
+                    doc_relacionados = pago.findall('.//DoctoRelacionado')
+
+                if doc_relacionados:
+                    for docto in doc_relacionados:
+                        folio_docto = docto.get('Folio', '')
+                        monto_docto = float(docto.get('MontoPagedo', '0') or docto.get('MontoPagado', '0') or 0)
+
+                        rows.append({
+                            'Fecha': fecha_comprobante,
+                            'Receptor': receptor_nombre,
+                            'RFC Receptor': receptor_rfc,
+                            'Folio Pago': folio_comprobante,
+                            'Folio Documento': folio_docto,
+                            'Monto Pagado': round(monto_docto, 2)
+                        })
+                else:
+                    # Si no hay documentos relacionados, crear una fila con el monto del pago
+                    rows.append({
+                        'Fecha': fecha_comprobante,
+                        'Receptor': receptor_nombre,
+                        'RFC Receptor': receptor_rfc,
+                        'Folio Pago': folio_comprobante,
+                        'Folio Documento': '',
+                        'Monto Pagado': round(monto_pago, 2)
+                    })
+
+        return rows
+
+    except Exception as e:
+        return []
+
+# ============= PROCESADORES DE ARCHIVOS =============
+
+def process_invoice_files(uploaded_files):
+    """Procesa múltiples archivos XML de facturas"""
     all_invoices = []
     errors = []
 
@@ -333,90 +404,216 @@ def process_files(uploaded_files):
 
     if all_invoices:
         df = pd.DataFrame(all_invoices)
-        # ORDENAR POR FECHA (de más antigua a más reciente)
         df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
         df = df.sort_values('Fecha').reset_index(drop=True)
-        # Convertir fecha a string para Excel
         df['Fecha'] = df['Fecha'].dt.strftime('%Y-%m-%d %H:%M:%S')
         return df, errors
 
     return None, errors
 
-uploaded_files = st.file_uploader(
-    "Seleccionar archivos XML",
-    type=['xml'],
-    accept_multiple_files=True,
-    help="Arrastra o selecciona múltiples archivos XML"
-)
+def process_payment_files(uploaded_files):
+    """Procesa múltiples archivos XML de pagos"""
+    all_payments = []
+    errors = []
 
-if uploaded_files:
-    st.markdown(f'<div class="status-info">{len(uploaded_files)} archivo(s) seleccionado(s)</div>', unsafe_allow_html=True)
+    progress_bar = st.progress(0)
+    status_text = st.empty()
 
-    col1, col2, col3 = st.columns([2, 2, 1])
+    for idx, uploaded_file in enumerate(uploaded_files):
+        try:
+            xml_content = uploaded_file.read().decode('utf-8', errors='ignore')
+            payments = parse_xml_payment(xml_content)
 
-    with col1:
-        process_btn = st.button('Procesar y Descargar', type="primary", use_container_width=True)
+            if payments:
+                all_payments.extend(payments)
+                status_text.text(f"Procesado: {uploaded_file.name} ({len(payments)} pago(s))")
+            else:
+                errors.append(f"{uploaded_file.name}: No se encontraron pagos")
 
-    with col2:
-        preview_btn = st.button('Vista Previa', type="secondary", use_container_width=True)
+            progress_bar.progress((idx + 1) / len(uploaded_files))
 
-    if process_btn:
-        with st.spinner('Procesando archivos...'):
-            df, errors = process_files(uploaded_files)
+        except Exception as e:
+            errors.append(f"{uploaded_file.name}: {str(e)}")
 
-        if df is not None and len(df) > 0:
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df.to_excel(writer, sheet_name='Facturas', index=False)
+    progress_bar.empty()
+    status_text.empty()
 
-                worksheet = writer.sheets['Facturas']
-                column_widths = {
-                    'UUID': 40, 'Fecha': 20, 'Tipo': 8, 'RFC Emisor': 15,
-                    'Emisor': 35, 'Descripcion': 60, 'Cantidad': 12,
-                    'Importe': 12, 'IVA': 12, 'ISR Retenido': 15,
-                    'IVA Retenido': 15, 'IEPS': 12, 'Subtotal': 12,
-                    'Total': 12, 'Moneda': 10
-                }
+    if all_payments:
+        df = pd.DataFrame(all_payments)
+        df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
+        df = df.sort_values('Fecha').reset_index(drop=True)
+        df['Fecha'] = df['Fecha'].dt.strftime('%Y-%m-%d %H:%M:%S')
+        return df, errors
 
-                for idx, col in enumerate(df.columns):
-                    width = column_widths.get(col, 20)
-                    col_letter = chr(65 + idx) if idx < 26 else chr(65 + idx // 26 - 1) + chr(65 + idx % 26)
-                    worksheet.column_dimensions[col_letter].width = width
+    return None, errors
 
-            output.seek(0)
+# ============= UI CON PESTAÑAS =============
 
-            st.markdown(f'<div class="status-success">{len(df)} factura(s) procesada(s) y ordenada(s) cronológicamente</div>', unsafe_allow_html=True)
+tab1, tab2 = st.tabs(["📄 Facturas", "💰 Pagos"])
 
-            st.download_button(
-                label="Descargar Excel",
-                data=output.getvalue(),
-                file_name=f"Facturas_SAT_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
+# ============= PESTAÑA 1: FACTURAS =============
 
-            if errors:
-                st.markdown(f'<div class="status-warning">Advertencias: {len(errors)} archivo(s) con problemas</div>', unsafe_allow_html=True)
-                with st.expander("Ver detalles"):
+with tab1:
+    st.markdown("### Procesar Facturas XML")
+
+    uploaded_files_inv = st.file_uploader(
+        "Seleccionar archivos XML (Facturas)",
+        type=['xml'],
+        accept_multiple_files=True,
+        key="invoices",
+        help="Arrastra o selecciona múltiples archivos XML"
+    )
+
+    if uploaded_files_inv:
+        st.markdown(f'<div class="status-info">{len(uploaded_files_inv)} archivo(s) seleccionado(s)</div>', unsafe_allow_html=True)
+
+        col1, col2 = st.columns([2, 2])
+
+        with col1:
+            process_btn = st.button('Procesar y Descargar', type="primary", use_container_width=True, key="proc_inv")
+
+        with col2:
+            preview_btn = st.button('Vista Previa', type="secondary", use_container_width=True, key="prev_inv")
+
+        if process_btn:
+            with st.spinner('Procesando facturas...'):
+                df, errors = process_invoice_files(uploaded_files_inv)
+
+            if df is not None and len(df) > 0:
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df.to_excel(writer, sheet_name='Facturas', index=False)
+
+                    worksheet = writer.sheets['Facturas']
+                    column_widths = {
+                        'UUID': 40, 'Fecha': 20, 'Tipo': 8, 'RFC Emisor': 15,
+                        'Emisor': 35, 'Descripcion': 60, 'Cantidad': 12,
+                        'Importe': 12, 'IVA': 12, 'ISR Retenido': 15,
+                        'IVA Retenido': 15, 'IEPS': 12, 'Subtotal': 12,
+                        'Total': 12, 'Moneda': 10
+                    }
+
+                    for idx, col in enumerate(df.columns):
+                        width = column_widths.get(col, 20)
+                        col_letter = chr(65 + idx) if idx < 26 else chr(65 + idx // 26 - 1) + chr(65 + idx % 26)
+                        worksheet.column_dimensions[col_letter].width = width
+
+                output.seek(0)
+
+                st.markdown(f'<div class="status-success">{len(df)} factura(s) procesada(s) y ordenada(s) cronológicamente</div>', unsafe_allow_html=True)
+
+                st.download_button(
+                    label="Descargar Excel",
+                    data=output.getvalue(),
+                    file_name=f"Facturas_SAT_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+
+                if errors:
+                    st.markdown(f'<div class="status-warning">Advertencias: {len(errors)} archivo(s) con problemas</div>', unsafe_allow_html=True)
+                    with st.expander("Ver detalles"):
+                        for error in errors:
+                            st.text(error)
+            else:
+                st.markdown('<div class="status-error">No se encontraron facturas válidas</div>', unsafe_allow_html=True)
+                if errors:
                     for error in errors:
-                        st.text(error)
-        else:
-            st.markdown('<div class="status-error">No se encontraron facturas válidas</div>', unsafe_allow_html=True)
-            if errors:
-                for error in errors:
-                    st.error(error)
+                        st.error(error)
 
-    if preview_btn:
-        df, errors = process_files(uploaded_files)
+        if preview_btn:
+            df, errors = process_invoice_files(uploaded_files_inv)
 
-        if df is not None and len(df) > 0:
-            st.markdown("### Vista Previa (Ordenada cronológicamente)")
-            st.dataframe(df.head(10), use_container_width=True, height=400)
-            st.caption(f"Mostrando primeros 10 de {len(df)} facturas")
+            if df is not None and len(df) > 0:
+                st.markdown("### Vista Previa (Ordenada cronológicamente)")
+                st.dataframe(df.head(10), use_container_width=True, height=400)
+                st.caption(f"Mostrando primeros 10 de {len(df)} facturas")
 
-            if errors:
-                with st.expander("Advertencias"):
-                    for error in errors:
-                        st.text(error)
-        else:
-            st.markdown('<div class="status-error">Error al procesar archivos</div>', unsafe_allow_html=True)
+                if errors:
+                    with st.expander("Advertencias"):
+                        for error in errors:
+                            st.text(error)
+            else:
+                st.markdown('<div class="status-error">Error al procesar archivos</div>', unsafe_allow_html=True)
+
+# ============= PESTAÑA 2: PAGOS =============
+
+with tab2:
+    st.markdown("### Procesar Pagos XML")
+
+    uploaded_files_pay = st.file_uploader(
+        "Seleccionar archivos XML (Pagos)",
+        type=['xml'],
+        accept_multiple_files=True,
+        key="payments",
+        help="Arrastra o selecciona múltiples archivos XML de pagos"
+    )
+
+    if uploaded_files_pay:
+        st.markdown(f'<div class="status-info">{len(uploaded_files_pay)} archivo(s) seleccionado(s)</div>', unsafe_allow_html=True)
+
+        col1, col2 = st.columns([2, 2])
+
+        with col1:
+            process_btn_pay = st.button('Procesar y Descargar', type="primary", use_container_width=True, key="proc_pay")
+
+        with col2:
+            preview_btn_pay = st.button('Vista Previa', type="secondary", use_container_width=True, key="prev_pay")
+
+        if process_btn_pay:
+            with st.spinner('Procesando pagos...'):
+                df_pay, errors_pay = process_payment_files(uploaded_files_pay)
+
+            if df_pay is not None and len(df_pay) > 0:
+                output_pay = BytesIO()
+                with pd.ExcelWriter(output_pay, engine='openpyxl') as writer:
+                    df_pay.to_excel(writer, sheet_name='Pagos', index=False)
+
+                    worksheet = writer.sheets['Pagos']
+                    column_widths = {
+                        'Fecha': 20, 'Receptor': 35, 'RFC Receptor': 15,
+                        'Folio Pago': 15, 'Folio Documento': 15, 'Monto Pagado': 15
+                    }
+
+                    for idx, col in enumerate(df_pay.columns):
+                        width = column_widths.get(col, 20)
+                        col_letter = chr(65 + idx) if idx < 26 else chr(65 + idx // 26 - 1) + chr(65 + idx % 26)
+                        worksheet.column_dimensions[col_letter].width = width
+
+                output_pay.seek(0)
+
+                st.markdown(f'<div class="status-success">{len(df_pay)} pago(s) procesado(s) y ordenado(s) cronológicamente</div>', unsafe_allow_html=True)
+
+                st.download_button(
+                    label="Descargar Excel",
+                    data=output_pay.getvalue(),
+                    file_name=f"Pagos_SAT_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+
+                if errors_pay:
+                    st.markdown(f'<div class="status-warning">Advertencias: {len(errors_pay)} archivo(s) con problemas</div>', unsafe_allow_html=True)
+                    with st.expander("Ver detalles"):
+                        for error in errors_pay:
+                            st.text(error)
+            else:
+                st.markdown('<div class="status-error">No se encontraron pagos válidos</div>', unsafe_allow_html=True)
+                if errors_pay:
+                    for error in errors_pay:
+                        st.error(error)
+
+        if preview_btn_pay:
+            df_pay, errors_pay = process_payment_files(uploaded_files_pay)
+
+            if df_pay is not None and len(df_pay) > 0:
+                st.markdown("### Vista Previa (Ordenada cronológicamente)")
+                st.dataframe(df_pay.head(15), use_container_width=True, height=400)
+                st.caption(f"Mostrando primeros 15 de {len(df_pay)} pagos")
+
+                if errors_pay:
+                    with st.expander("Advertencias"):
+                        for error in errors_pay:
+                            st.text(error)
+            else:
+                st.markdown('<div class="status-error">Error al procesar archivos</div>', unsafe_allow_html=True)
