@@ -349,8 +349,8 @@ def parse_xml_payment(xml_text):
                         folio_docto = docto.get('Folio', '')
                         # CORREGIDO: buscar ImPagado, ImpPagado, MontoPagado, etc.
                         monto_docto = float(
-                            docto.get('ImPagado', '0') or 
                             docto.get('ImpPagado', '0') or 
+                            docto.get('ImPagado', '0') or 
                             docto.get('MontoPagado', '0') or 
                             docto.get('MontoPagedo', '0') or 
                             0
