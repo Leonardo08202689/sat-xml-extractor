@@ -203,82 +203,79 @@ def extract_uuid(root):
 
 
 def parse_sat_metadata(file_bytes: bytes) -> pd.DataFrame:
-    """Lee el TXT de metadata del SAT.
-
-    Nota: El SAT suele entregar metadata como archivo TXT con valores separados por '|' y una fila por CFDI.
-    Los encabezados pueden variar. Esta función intenta detectar columnas clave.
+    """
+    Lee el TXT de metadata del SAT.
+    Soporta delimitadores típicos: ~ (muy común), | o ,.
+    Devuelve DataFrame con columnas: UUID, Estado (Vigente/Cancelado) y opcional FechaCancelacion.
     """
     text = file_bytes.decode('utf-8', errors='ignore')
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
 
-    # Remover posibles líneas de encabezado vacías/no-data
-    # Detectar delimitador
-    delim = '|' if any('|' in ln for ln in lines[:5]) else ','
-
-    # Construir filas
-    rows = []
-    for ln in lines:
-        if delim == '|':
-            parts = [p.strip() for p in ln.split('|')]
-        else:
-            parts = [p.strip() for p in ln.split(',')]
-        rows.append(parts)
-
-    # Heurística: si la primera fila parece header (tiene palabras) úsala
-    header = rows[0]
-    is_header = any(any(ch.isalpha() for ch in cell) for cell in header)
-
-    if is_header:
-        df = pd.DataFrame(rows[1:], columns=header)
+    # Detectar delimitador (prioridad: ~ luego | luego ,)
+    sample = "\n".join(lines[:10])
+    if "~" in sample:
+        delim = "~"
+    elif "|" in sample:
+        delim = "|"
     else:
-        # Si no hay header, asignar columnas genéricas
-        maxlen = max(len(r) for r in rows)
-        cols = [f'col_{i+1}' for i in range(maxlen)]
-        df = pd.DataFrame([r + [''] * (maxlen - len(r)) for r in rows], columns=cols)
+        delim = ","
 
-    # Normalizar nombres de columnas
+    # Leer con pandas para manejar bien CRLF y columnas
+    from io import StringIO
+    df = pd.read_csv(StringIO(text), sep=delim, dtype=str, engine="python")
+
+    # Normalizar encabezados
     df.columns = [c.strip() for c in df.columns]
 
-    # Buscar UUID
+    # Detectar columna UUID
     uuid_col = None
     for c in df.columns:
-        if c.strip().lower() in ('uuid', 'foliofiscal', 'folio fiscal', 'folfiscal'):
+        cl = c.lower().replace(" ", "")
+        if cl in ("uuid", "uuidcfdi", "uuidfoliofiscal", "foliofiscal", "uuidfolio"):
             uuid_col = c
             break
-
-    # Algunos metadatos vienen con nombres distintos
     if uuid_col is None:
         for c in df.columns:
-            if 'uuid' in c.lower() or 'folio' in c.lower():
+            if "uuid" in c.lower() or "foliofiscal" in c.lower():
                 uuid_col = c
                 break
-
     if uuid_col is None:
-        raise ValueError('No se pudo detectar la columna UUID/Folio Fiscal en la metadata.')
+        raise ValueError("No se pudo detectar la columna UUID en la metadata.")
 
-    # Buscar Estatus
+    # Detectar columna Estatus/Estado
     estatus_col = None
     for c in df.columns:
         cl = c.lower()
-        if 'estatus' in cl or 'estado' in cl or 'situacion' in cl:
+        if "estatus" in cl or "estado" in cl or "situacion" in cl:
             estatus_col = c
             break
-
-    # Algunas metadata no traen estatus; si no viene, dejar vacío
     if estatus_col is None:
-        df['EstatusDetectado'] = ''
-        estatus_col = 'EstatusDetectado'
+        df["Estatus"] = ""
+        estatus_col = "Estatus"
 
-    out = df[[uuid_col, estatus_col]].copy()
-    out.columns = ['UUID', 'Estado']
+    # Detectar fecha de cancelación (si viene)
+    fecha_cancel_col = None
+    for c in df.columns:
+        if "fechacancel" in c.lower().replace(" ", ""):
+            fecha_cancel_col = c
+            break
 
-    # Normalizar UUID
-    out['UUID'] = out['UUID'].astype(str).str.strip().str.upper()
-    out['Estado'] = out['Estado'].astype(str).str.strip()
+    out = df[[uuid_col, estatus_col] + ([fecha_cancel_col] if fecha_cancel_col else [])].copy()
+    out = out.rename(columns={uuid_col: "UUID", estatus_col: "Estado"})
+    out["UUID"] = out["UUID"].astype(str).str.strip().str.upper()
+    out["Estado"] = out["Estado"].astype(str).str.strip()
 
-    # Eliminar duplicados por UUID dejando el último
-    out = out.drop_duplicates(subset=['UUID'], keep='last').reset_index(drop=True)
+    # Mapear 0/1 a texto cuando aplique
+    out["Estado"] = out["Estado"].replace({"1": "Vigente", "0": "Cancelado", "true": "Vigente", "false": "Cancelado"})
+
+    # Si existe fecha cancelación, renombrarla
+    if fecha_cancel_col:
+        out = out.rename(columns={fecha_cancel_col: "FechaCancelacion"})
+        out["FechaCancelacion"] = out["FechaCancelacion"].astype(str).str.strip()
+
+    out = out.drop_duplicates(subset=["UUID"], keep="last").reset_index(drop=True)
     return out
+
 
 
 def apply_metadata_estado(df: pd.DataFrame, meta_df: pd.DataFrame) -> pd.DataFrame:
