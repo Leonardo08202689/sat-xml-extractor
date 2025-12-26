@@ -347,7 +347,7 @@ def parse_xml_payment(xml_text):
                 if doc_relacionados:
                     for docto in doc_relacionados:
                         folio_docto = docto.get('Folio', '')
-                        # CORREGIDO: buscar ImPagado, ImpPagado, MontoPagado, etc.
+                        # CORREGIDO: leer ImpPagado correctamente
                         monto_docto = float(
                             docto.get('ImpPagado', '0') or 
                             docto.get('ImPagado', '0') or 
@@ -357,8 +357,9 @@ def parse_xml_payment(xml_text):
                         )
 
                         rows.append({
-                            'Fecha': fecha_comprobante,
                             'Receptor': receptor_nombre,
+                            'Fecha': fecha_comprobante,
+                            'Mes': '',  # Se llena después
                             'RFC Receptor': receptor_rfc,
                             'Folio Pago': folio_comprobante,
                             'Folio Documento': folio_docto,
@@ -367,8 +368,9 @@ def parse_xml_payment(xml_text):
                 else:
                     # Si no hay documentos relacionados, crear una fila con el monto del pago
                     rows.append({
-                        'Fecha': fecha_comprobante,
                         'Receptor': receptor_nombre,
+                        'Fecha': fecha_comprobante,
+                        'Mes': '',  # Se llena después
                         'RFC Receptor': receptor_rfc,
                         'Folio Pago': folio_comprobante,
                         'Folio Documento': '',
@@ -449,7 +451,22 @@ def process_payment_files(uploaded_files):
         df = pd.DataFrame(all_payments)
         df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
         df = df.sort_values('Fecha').reset_index(drop=True)
+
+        # Agregar mes según la fecha
+        meses = {
+            1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
+            5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
+            9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
+        }
+        df['Mes'] = df['Fecha'].dt.month.map(meses)
+
+        # Convertir fecha a string
         df['Fecha'] = df['Fecha'].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+        # Reordenar columnas: Receptor, Fecha, Mes, RFC Receptor, ...
+        columnas_ordenadas = ['Receptor', 'Fecha', 'Mes', 'RFC Receptor', 'Folio Pago', 'Folio Documento', 'Monto Pagado']
+        df = df[columnas_ordenadas]
+
         return df, errors
 
     return None, errors
@@ -578,7 +595,7 @@ with tab2:
 
                     worksheet = writer.sheets['Pagos']
                     column_widths = {
-                        'Fecha': 20, 'Receptor': 35, 'RFC Receptor': 15,
+                        'Receptor': 35, 'Fecha': 20, 'Mes': 12, 'RFC Receptor': 15,
                         'Folio Pago': 15, 'Folio Documento': 15, 'Monto Pagado': 15
                     }
 
