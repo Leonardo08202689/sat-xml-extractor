@@ -174,7 +174,7 @@ st.markdown("""
 st.markdown("""
     <div class="header-container">
         <h1 class="main-title">Extractor SAT XML</h1>
-        <p class="subtitle">Convierte tus facturas y pagos XML a Excel con desglose de impuestos</p>
+        <p class="subtitle">Convierte tus facturas y pagos XML a Excel (con Estado vía metadata SAT)</p>
     </div>
 """, unsafe_allow_html=True)
 
@@ -184,6 +184,130 @@ NS = {
     'tfd': 'http://www.sat.gob.mx/TimbreFiscalDigital',
     'pago20': 'http://www.sat.gob.mx/Pagos20'
 }
+
+# ============= UTILIDADES =============
+
+def safe_find_first(elem, paths, ns):
+    for p in paths:
+        found = elem.find(p, ns)
+        if found is not None:
+            return found
+    return None
+
+def extract_uuid(root):
+    timbre = root.find('.//tfd:TimbreFiscalDigital', NS)
+    if timbre is None:
+        # fallback sin namespaces (por si viene plano)
+        timbre = root.find('.//TimbreFiscalDigital')
+    return timbre.get('UUID', '') if timbre is not None else ''
+
+
+def parse_sat_metadata(file_bytes: bytes) -> pd.DataFrame:
+    """Lee el TXT de metadata del SAT.
+
+    Nota: El SAT suele entregar metadata como archivo TXT con valores separados por '|' y una fila por CFDI.
+    Los encabezados pueden variar. Esta función intenta detectar columnas clave.
+    """
+    text = file_bytes.decode('utf-8', errors='ignore')
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+    # Remover posibles líneas de encabezado vacías/no-data
+    # Detectar delimitador
+    delim = '|' if any('|' in ln for ln in lines[:5]) else ','
+
+    # Construir filas
+    rows = []
+    for ln in lines:
+        if delim == '|':
+            parts = [p.strip() for p in ln.split('|')]
+        else:
+            parts = [p.strip() for p in ln.split(',')]
+        rows.append(parts)
+
+    # Heurística: si la primera fila parece header (tiene palabras) úsala
+    header = rows[0]
+    is_header = any(any(ch.isalpha() for ch in cell) for cell in header)
+
+    if is_header:
+        df = pd.DataFrame(rows[1:], columns=header)
+    else:
+        # Si no hay header, asignar columnas genéricas
+        maxlen = max(len(r) for r in rows)
+        cols = [f'col_{i+1}' for i in range(maxlen)]
+        df = pd.DataFrame([r + [''] * (maxlen - len(r)) for r in rows], columns=cols)
+
+    # Normalizar nombres de columnas
+    df.columns = [c.strip() for c in df.columns]
+
+    # Buscar UUID
+    uuid_col = None
+    for c in df.columns:
+        if c.strip().lower() in ('uuid', 'foliofiscal', 'folio fiscal', 'folfiscal'):
+            uuid_col = c
+            break
+
+    # Algunos metadatos vienen con nombres distintos
+    if uuid_col is None:
+        for c in df.columns:
+            if 'uuid' in c.lower() or 'folio' in c.lower():
+                uuid_col = c
+                break
+
+    if uuid_col is None:
+        raise ValueError('No se pudo detectar la columna UUID/Folio Fiscal en la metadata.')
+
+    # Buscar Estatus
+    estatus_col = None
+    for c in df.columns:
+        cl = c.lower()
+        if 'estatus' in cl or 'estado' in cl or 'situacion' in cl:
+            estatus_col = c
+            break
+
+    # Algunas metadata no traen estatus; si no viene, dejar vacío
+    if estatus_col is None:
+        df['EstatusDetectado'] = ''
+        estatus_col = 'EstatusDetectado'
+
+    out = df[[uuid_col, estatus_col]].copy()
+    out.columns = ['UUID', 'Estado']
+
+    # Normalizar UUID
+    out['UUID'] = out['UUID'].astype(str).str.strip().str.upper()
+    out['Estado'] = out['Estado'].astype(str).str.strip()
+
+    # Eliminar duplicados por UUID dejando el último
+    out = out.drop_duplicates(subset=['UUID'], keep='last').reset_index(drop=True)
+    return out
+
+
+def apply_metadata_estado(df: pd.DataFrame, meta_df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    if meta_df is None or meta_df.empty:
+        # si no hay metadata, asegurar columna Estado
+        if 'Estado' not in df.columns:
+            df['Estado'] = ''
+        return df
+
+    # Normalizar UUID de df
+    if 'UUID' in df.columns:
+        df2 = df.copy()
+        df2['UUID'] = df2['UUID'].astype(str).str.strip().str.upper()
+        merged = df2.merge(meta_df, on='UUID', how='left', suffixes=('', '_meta'))
+        # Si ya existe Estado (por otra fuente), preferir metadata cuando exista
+        if 'Estado_meta' in merged.columns:
+            if 'Estado' in df2.columns:
+                merged['Estado'] = merged['Estado_meta'].where(merged['Estado_meta'].notna() & (merged['Estado_meta'] != ''), merged['Estado'])
+                merged = merged.drop(columns=['Estado_meta'])
+            else:
+                merged = merged.rename(columns={'Estado_meta': 'Estado'})
+        return merged
+
+    # Si no hay UUID en df, no se puede cruzar
+    df2 = df.copy()
+    df2['Estado'] = ''
+    return df2
 
 # ============= PARSERS PARA FACTURAS =============
 
@@ -198,15 +322,10 @@ def parse_xml_invoice_one_row(xml_text):
         moneda = root.get('Moneda', 'MXN')
         tipo_comprobante = root.get('TipoDeComprobante', '')
 
-        timbre = root.find('.//tfd:TimbreFiscalDigital', NS)
-        uuid = timbre.get('UUID', '') if timbre is not None else ''
+        uuid = extract_uuid(root)
 
         # Emisor
-        emisor = root.find('cfdi:Emisor', NS)
-        if emisor is None:
-            emisor = root.find('cfdi3:Emisor', NS)
-        if emisor is None:
-            emisor = root.find('Emisor')
+        emisor = safe_find_first(root, ['cfdi:Emisor', 'cfdi3:Emisor', 'Emisor'], NS)
 
         emisor_rfc = ''
         emisor_nombre = ''
@@ -240,11 +359,7 @@ def parse_xml_invoice_one_row(xml_text):
             total_cantidad += cantidad
             total_importe += importe
 
-            impuestos_concepto = concepto.find('cfdi:Impuestos', NS)
-            if impuestos_concepto is None:
-                impuestos_concepto = concepto.find('cfdi3:Impuestos', NS)
-            if impuestos_concepto is None:
-                impuestos_concepto = concepto.find('Impuestos')
+            impuestos_concepto = safe_find_first(concepto, ['cfdi:Impuestos', 'cfdi3:Impuestos', 'Impuestos'], NS)
 
             if impuestos_concepto is not None:
                 traslados = impuestos_concepto.findall('cfdi:Traslados/cfdi:Traslado', NS)
@@ -294,10 +409,11 @@ def parse_xml_invoice_one_row(xml_text):
             'IEPS': round(ieps, 2),
             'Subtotal': subtotal,
             'Total': total,
-            'Moneda': moneda
+            'Moneda': moneda,
+            'Estado': ''
         }
 
-    except Exception as e:
+    except Exception:
         return None
 
 # ============= PARSERS PARA PAGOS =============
@@ -310,11 +426,10 @@ def parse_xml_payment(xml_text):
         # Datos principales del comprobante
         fecha_comprobante = root.get('Fecha', '')
         folio_comprobante = root.get('Folio', '')
+        uuid = extract_uuid(root)
 
         # Receptor
-        receptor = root.find('cfdi:Receptor', NS)
-        if receptor is None:
-            receptor = root.find('Receptor')
+        receptor = safe_find_first(root, ['cfdi:Receptor', 'Receptor'], NS)
 
         receptor_rfc = ''
         receptor_nombre = ''
@@ -330,16 +445,13 @@ def parse_xml_payment(xml_text):
         rows = []
 
         if pagos is not None:
-            # Iterar sobre cada pago (Pago)
             pago_list = pagos.findall('pago20:Pago', NS)
             if not pago_list:
                 pago_list = pagos.findall('.//Pago')
 
             for pago in pago_list:
-                fecha_pago = pago.get('FechaPago', '')
                 monto_pago = float(pago.get('Monto', '0') or 0)
 
-                # Buscar documentos relacionados dentro de este pago
                 doc_relacionados = pago.findall('pago20:DoctoRelacionado', NS)
                 if not doc_relacionados:
                     doc_relacionados = pago.findall('.//DoctoRelacionado')
@@ -347,45 +459,46 @@ def parse_xml_payment(xml_text):
                 if doc_relacionados:
                     for docto in doc_relacionados:
                         folio_docto = docto.get('Folio', '')
-                        # CORREGIDO: leer ImpPagado correctamente
                         monto_docto = float(
-                            docto.get('ImpPagado', '0') or 
-                            docto.get('ImPagado', '0') or 
-                            docto.get('MontoPagado', '0') or 
-                            docto.get('MontoPagedo', '0') or 
+                            docto.get('ImpPagado', '0') or
+                            docto.get('ImPagado', '0') or
+                            docto.get('MontoPagado', '0') or
+                            docto.get('MontoPagedo', '0') or
                             0
                         )
 
                         rows.append({
+                            'UUID': uuid,
                             'Receptor': receptor_nombre,
                             'Fecha': fecha_comprobante,
-                            'Mes': '',  # Se llena después
+                            'Mes': '',
                             'RFC Receptor': receptor_rfc,
                             'Folio Pago': folio_comprobante,
                             'Folio Documento': folio_docto,
-                            'Monto Pagado': round(monto_docto, 2)
+                            'Monto Pagado': round(monto_docto, 2),
+                            'Estado': ''
                         })
                 else:
-                    # Si no hay documentos relacionados, crear una fila con el monto del pago
                     rows.append({
+                        'UUID': uuid,
                         'Receptor': receptor_nombre,
                         'Fecha': fecha_comprobante,
-                        'Mes': '',  # Se llena después
+                        'Mes': '',
                         'RFC Receptor': receptor_rfc,
                         'Folio Pago': folio_comprobante,
                         'Folio Documento': '',
-                        'Monto Pagado': round(monto_pago, 2)
+                        'Monto Pagado': round(monto_pago, 2),
+                        'Estado': ''
                     })
 
         return rows
 
-    except Exception as e:
+    except Exception:
         return []
 
 # ============= PROCESADORES DE ARCHIVOS =============
 
 def process_invoice_files(uploaded_files):
-    """Procesa múltiples archivos XML de facturas"""
     all_invoices = []
     errors = []
 
@@ -420,8 +533,8 @@ def process_invoice_files(uploaded_files):
 
     return None, errors
 
+
 def process_payment_files(uploaded_files):
-    """Procesa múltiples archivos XML de pagos"""
     all_payments = []
     errors = []
 
@@ -452,7 +565,6 @@ def process_payment_files(uploaded_files):
         df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
         df = df.sort_values('Fecha').reset_index(drop=True)
 
-        # Agregar mes según la fecha
         meses = {
             1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
             5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
@@ -460,16 +572,15 @@ def process_payment_files(uploaded_files):
         }
         df['Mes'] = df['Fecha'].dt.month.map(meses)
 
-        # Convertir fecha a string
         df['Fecha'] = df['Fecha'].dt.strftime('%Y-%m-%d %H:%M:%S')
 
-        # Reordenar columnas: Receptor, Fecha, Mes, RFC Receptor, ...
-        columnas_ordenadas = ['Receptor', 'Fecha', 'Mes', 'RFC Receptor', 'Folio Pago', 'Folio Documento', 'Monto Pagado']
+        columnas_ordenadas = ['Receptor', 'Fecha', 'Mes', 'RFC Receptor', 'Folio Pago', 'Folio Documento', 'Monto Pagado', 'Estado', 'UUID']
+        # mantener UUID al final (por si quieres cruzar/depurar); luego lo quitamos en export si no lo quieres
         df = df[columnas_ordenadas]
-
         return df, errors
 
     return None, errors
+
 
 # ============= UI CON PESTAÑAS =============
 
@@ -479,6 +590,24 @@ tab1, tab2 = st.tabs(["📄 Facturas", "💰 Pagos"])
 
 with tab1:
     st.markdown("### Procesar Facturas XML")
+
+    meta_file = st.file_uploader(
+        "(Opcional) Subir Metadata del SAT (.txt) para llenar Estado (Vigente/Cancelado)",
+        type=['txt'],
+        accept_multiple_files=False,
+        key="meta_inv",
+        help="Descarga el archivo de metadatos desde SAT > Emitidas > Descargar Metadatos"
+    )
+
+    meta_df = None
+    if meta_file is not None:
+        try:
+            meta_df = parse_sat_metadata(meta_file.getvalue())
+            st.markdown(f'<div class="status-success">Metadata cargada: {len(meta_df)} UUID(s)</div>', unsafe_allow_html=True)
+            with st.expander("Vista previa metadata"):
+                st.dataframe(meta_df.head(15), use_container_width=True)
+        except Exception as e:
+            st.markdown(f'<div class="status-error">No se pudo leer la metadata: {str(e)}</div>', unsafe_allow_html=True)
 
     uploaded_files_inv = st.file_uploader(
         "Seleccionar archivos XML (Facturas)",
@@ -502,10 +631,13 @@ with tab1:
         if process_btn:
             with st.spinner('Procesando facturas...'):
                 df, errors = process_invoice_files(uploaded_files_inv)
+                if df is not None:
+                    df = apply_metadata_estado(df, meta_df)
 
             if df is not None and len(df) > 0:
                 output = BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    # Si no quieres mostrar UUID, puedes quitarlo aquí (pero lo dejo porque es clave)
                     df.to_excel(writer, sheet_name='Facturas', index=False)
 
                     worksheet = writer.sheets['Facturas']
@@ -514,7 +646,7 @@ with tab1:
                         'Emisor': 35, 'Descripcion': 60, 'Cantidad': 12,
                         'Importe': 12, 'IVA': 12, 'ISR Retenido': 15,
                         'IVA Retenido': 15, 'IEPS': 12, 'Subtotal': 12,
-                        'Total': 12, 'Moneda': 10
+                        'Total': 12, 'Moneda': 10, 'Estado': 14
                     }
 
                     for idx, col in enumerate(df.columns):
@@ -547,6 +679,8 @@ with tab1:
 
         if preview_btn:
             df, errors = process_invoice_files(uploaded_files_inv)
+            if df is not None:
+                df = apply_metadata_estado(df, meta_df)
 
             if df is not None and len(df) > 0:
                 st.markdown("### Vista Previa (Ordenada cronológicamente)")
@@ -564,6 +698,24 @@ with tab1:
 
 with tab2:
     st.markdown("### Procesar Pagos XML")
+
+    meta_file_pay = st.file_uploader(
+        "(Opcional) Subir Metadata del SAT (.txt) para llenar Estado (Vigente/Cancelado)",
+        type=['txt'],
+        accept_multiple_files=False,
+        key="meta_pay",
+        help="Descarga el archivo de metadatos desde SAT > Emitidas > Descargar Metadatos"
+    )
+
+    meta_df_pay = None
+    if meta_file_pay is not None:
+        try:
+            meta_df_pay = parse_sat_metadata(meta_file_pay.getvalue())
+            st.markdown(f'<div class="status-success">Metadata cargada: {len(meta_df_pay)} UUID(s)</div>', unsafe_allow_html=True)
+            with st.expander("Vista previa metadata"):
+                st.dataframe(meta_df_pay.head(15), use_container_width=True)
+        except Exception as e:
+            st.markdown(f'<div class="status-error">No se pudo leer la metadata: {str(e)}</div>', unsafe_allow_html=True)
 
     uploaded_files_pay = st.file_uploader(
         "Seleccionar archivos XML (Pagos)",
@@ -587,19 +739,27 @@ with tab2:
         if process_btn_pay:
             with st.spinner('Procesando pagos...'):
                 df_pay, errors_pay = process_payment_files(uploaded_files_pay)
+                if df_pay is not None:
+                    # para pagos, el UUID lo dejamos en df (al final) y aplicamos metadata
+                    df_pay = apply_metadata_estado(df_pay, meta_df_pay)
 
             if df_pay is not None and len(df_pay) > 0:
+                # Quitar UUID del export si no lo quieres en Excel
+                export_pay = df_pay.copy()
+                if 'UUID' in export_pay.columns:
+                    export_pay = export_pay.drop(columns=['UUID'])
+
                 output_pay = BytesIO()
                 with pd.ExcelWriter(output_pay, engine='openpyxl') as writer:
-                    df_pay.to_excel(writer, sheet_name='Pagos', index=False)
+                    export_pay.to_excel(writer, sheet_name='Pagos', index=False)
 
                     worksheet = writer.sheets['Pagos']
                     column_widths = {
                         'Receptor': 35, 'Fecha': 20, 'Mes': 12, 'RFC Receptor': 15,
-                        'Folio Pago': 15, 'Folio Documento': 15, 'Monto Pagado': 15
+                        'Folio Pago': 15, 'Folio Documento': 15, 'Monto Pagado': 15, 'Estado': 14
                     }
 
-                    for idx, col in enumerate(df_pay.columns):
+                    for idx, col in enumerate(export_pay.columns):
                         width = column_widths.get(col, 20)
                         col_letter = chr(65 + idx) if idx < 26 else chr(65 + idx // 26 - 1) + chr(65 + idx % 26)
                         worksheet.column_dimensions[col_letter].width = width
@@ -629,9 +789,12 @@ with tab2:
 
         if preview_btn_pay:
             df_pay, errors_pay = process_payment_files(uploaded_files_pay)
+            if df_pay is not None:
+                df_pay = apply_metadata_estado(df_pay, meta_df_pay)
 
             if df_pay is not None and len(df_pay) > 0:
                 st.markdown("### Vista Previa (Ordenada cronológicamente)")
+                # en preview sí mostramos UUID para depurar
                 st.dataframe(df_pay.head(15), use_container_width=True, height=400)
                 st.caption(f"Mostrando primeros 15 de {len(df_pay)} pagos")
 
