@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import xml.etree.ElementTree as ET
-from io import BytesIO
+from io import BytesIO, StringIO
 from datetime import datetime
 
 st.set_page_config(
@@ -204,16 +204,16 @@ def extract_uuid(root):
 
 def parse_sat_metadata(file_bytes: bytes) -> pd.DataFrame:
     """Lee el TXT de metadata del SAT.
-
     Soporta delimitadores típicos: '~' (muy común), '|' o ','.
-    En la metadata del SAT el campo Estatus suele venir como 1=Vigente y 0=Cancelado,
-    y puede traer FechaCancelacion.
+    En la metadata del SAT el campo Estatus suele venir como 1=Vigente y 0=Cancelado.
     """
+    from io import StringIO
+    
     text = file_bytes.decode('utf-8', errors='ignore')
-
+    lines_sample = [ln for ln in text.splitlines()[:10] if ln.strip()]
+    sample = "\n".join(lines_sample)
+    
     # Detectar delimitador (prioridad: ~, luego |, luego ,)
-    sample = "\n".join([ln for ln in text.splitlines()[:10] if ln.strip()])
-".join([ln for ln in text.splitlines()[:10] if ln.strip()])
     if "~" in sample:
         delim = "~"
     elif "|" in sample:
@@ -229,7 +229,7 @@ def parse_sat_metadata(file_bytes: bytes) -> pd.DataFrame:
     uuid_col = None
     for c in df.columns:
         cl = c.lower().replace(" ", "")
-        if cl in ("uuid", "uuidcfdi", "uuidfoliofiscal", "foliofiscal", "uuidfolio", "uuidfoliofiscal"):
+        if cl in ("uuid", "uuidcfdi", "uuidfoliofiscal", "foliofiscal"):
             uuid_col = c
             break
     if uuid_col is None:
@@ -238,7 +238,7 @@ def parse_sat_metadata(file_bytes: bytes) -> pd.DataFrame:
                 uuid_col = c
                 break
     if uuid_col is None:
-        raise ValueError("No se pudo detectar la columna UUID/Folio Fiscal en la metadata.")
+        raise ValueError("No se pudo detectar la columna UUID en la metadata.")
 
     # Detectar columna Estatus/Estado
     estatus_col = None
@@ -274,6 +274,7 @@ def parse_sat_metadata(file_bytes: bytes) -> pd.DataFrame:
 
     out = out.drop_duplicates(subset=["UUID"], keep="last").reset_index(drop=True)
     return out
+
 
 
 
@@ -696,8 +697,6 @@ with tab1:
 
 with tab2:
     st.markdown("### Procesar Pagos XML")
-
-    st.caption("Objetivo: ver qué REP (complementos de pago) existen y cuáles faltan, usando metadata SAT.")
 
     meta_file_pay = st.file_uploader(
         "(Opcional) Subir Metadata del SAT (.txt) para llenar Estado (Vigente/Cancelado)",
