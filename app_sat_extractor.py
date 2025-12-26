@@ -203,16 +203,17 @@ def extract_uuid(root):
 
 
 def parse_sat_metadata(file_bytes: bytes) -> pd.DataFrame:
-    """
-    Lee el TXT de metadata del SAT.
-    Soporta delimitadores típicos: ~ (muy común), | o ,.
-    Devuelve DataFrame con columnas: UUID, Estado (Vigente/Cancelado) y opcional FechaCancelacion.
+    """Lee el TXT de metadata del SAT.
+
+    Soporta delimitadores típicos: '~' (muy común), '|' o ','.
+    En la metadata del SAT el campo Estatus suele venir como 1=Vigente y 0=Cancelado,
+    y puede traer FechaCancelacion.
     """
     text = file_bytes.decode('utf-8', errors='ignore')
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
 
-    # Detectar delimitador (prioridad: ~ luego | luego ,)
-    sample = "\n".join(lines[:10])
+    # Detectar delimitador (prioridad: ~, luego |, luego ,)
+    sample = "
+".join([ln for ln in text.splitlines()[:10] if ln.strip()])
     if "~" in sample:
         delim = "~"
     elif "|" in sample:
@@ -220,18 +221,15 @@ def parse_sat_metadata(file_bytes: bytes) -> pd.DataFrame:
     else:
         delim = ","
 
-    # Leer con pandas para manejar bien CRLF y columnas
-    from io import StringIO
+    # Leer con pandas
     df = pd.read_csv(StringIO(text), sep=delim, dtype=str, engine="python")
-
-    # Normalizar encabezados
     df.columns = [c.strip() for c in df.columns]
 
     # Detectar columna UUID
     uuid_col = None
     for c in df.columns:
         cl = c.lower().replace(" ", "")
-        if cl in ("uuid", "uuidcfdi", "uuidfoliofiscal", "foliofiscal", "uuidfolio"):
+        if cl in ("uuid", "uuidcfdi", "uuidfoliofiscal", "foliofiscal", "uuidfolio", "uuidfoliofiscal"):
             uuid_col = c
             break
     if uuid_col is None:
@@ -240,7 +238,7 @@ def parse_sat_metadata(file_bytes: bytes) -> pd.DataFrame:
                 uuid_col = c
                 break
     if uuid_col is None:
-        raise ValueError("No se pudo detectar la columna UUID en la metadata.")
+        raise ValueError("No se pudo detectar la columna UUID/Folio Fiscal en la metadata.")
 
     # Detectar columna Estatus/Estado
     estatus_col = None
@@ -253,22 +251,23 @@ def parse_sat_metadata(file_bytes: bytes) -> pd.DataFrame:
         df["Estatus"] = ""
         estatus_col = "Estatus"
 
-    # Detectar fecha de cancelación (si viene)
+    # Detectar fecha de cancelación
     fecha_cancel_col = None
     for c in df.columns:
         if "fechacancel" in c.lower().replace(" ", ""):
             fecha_cancel_col = c
             break
 
-    out = df[[uuid_col, estatus_col] + ([fecha_cancel_col] if fecha_cancel_col else [])].copy()
+    cols = [uuid_col, estatus_col] + ([fecha_cancel_col] if fecha_cancel_col else [])
+    out = df[cols].copy()
     out = out.rename(columns={uuid_col: "UUID", estatus_col: "Estado"})
+
     out["UUID"] = out["UUID"].astype(str).str.strip().str.upper()
     out["Estado"] = out["Estado"].astype(str).str.strip()
 
-    # Mapear 0/1 a texto cuando aplique
+    # Mapear 0/1 a texto
     out["Estado"] = out["Estado"].replace({"1": "Vigente", "0": "Cancelado", "true": "Vigente", "false": "Cancelado"})
 
-    # Si existe fecha cancelación, renombrarla
     if fecha_cancel_col:
         out = out.rename(columns={fecha_cancel_col: "FechaCancelacion"})
         out["FechaCancelacion"] = out["FechaCancelacion"].astype(str).str.strip()
@@ -472,6 +471,7 @@ def parse_xml_payment(xml_text):
                             'RFC Receptor': receptor_rfc,
                             'Folio Pago': folio_comprobante,
                             'Folio Documento': folio_docto,
+                            'UUID Factura': (docto.get('IdDocumento', '') or '').strip(),
                             'Monto Pagado': round(monto_docto, 2),
                             'Estado': ''
                         })
@@ -484,6 +484,7 @@ def parse_xml_payment(xml_text):
                         'RFC Receptor': receptor_rfc,
                         'Folio Pago': folio_comprobante,
                         'Folio Documento': '',
+                        'UUID Factura': '',
                         'Monto Pagado': round(monto_pago, 2),
                         'Estado': ''
                     })
@@ -571,7 +572,7 @@ def process_payment_files(uploaded_files):
 
         df['Fecha'] = df['Fecha'].dt.strftime('%Y-%m-%d %H:%M:%S')
 
-        columnas_ordenadas = ['Receptor', 'Fecha', 'Mes', 'RFC Receptor', 'Folio Pago', 'Folio Documento', 'Monto Pagado', 'Estado', 'UUID']
+        columnas_ordenadas = ['Receptor', 'Fecha', 'Mes', 'RFC Receptor', 'Folio Pago', 'Folio Documento', 'UUID Factura', 'Monto Pagado', 'Estado', 'UUID']
         # mantener UUID al final (por si quieres cruzar/depurar); luego lo quitamos en export si no lo quieres
         df = df[columnas_ordenadas]
         return df, errors
@@ -696,6 +697,8 @@ with tab1:
 with tab2:
     st.markdown("### Procesar Pagos XML")
 
+    st.caption("Objetivo: ver qué REP (complementos de pago) existen y cuáles faltan, usando metadata SAT.")
+
     meta_file_pay = st.file_uploader(
         "(Opcional) Subir Metadata del SAT (.txt) para llenar Estado (Vigente/Cancelado)",
         type=['txt'],
@@ -753,7 +756,7 @@ with tab2:
                     worksheet = writer.sheets['Pagos']
                     column_widths = {
                         'Receptor': 35, 'Fecha': 20, 'Mes': 12, 'RFC Receptor': 15,
-                        'Folio Pago': 15, 'Folio Documento': 15, 'Monto Pagado': 15, 'Estado': 14
+                        'Folio Pago': 15, 'Folio Documento': 15, 'UUID Factura': 40, 'Monto Pagado': 15, 'Estado': 14
                     }
 
                     for idx, col in enumerate(export_pay.columns):
