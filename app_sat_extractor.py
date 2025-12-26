@@ -212,7 +212,7 @@ def parse_sat_metadata(file_bytes: bytes) -> pd.DataFrame:
     text = file_bytes.decode('utf-8', errors='ignore')
 
     # Detectar delimitador (prioridad: ~, luego |, luego ,)
-    sample = "
+    sample = "\n".join([ln for ln in text.splitlines()[:10] if ln.strip()])
 ".join([ln for ln in text.splitlines()[:10] if ln.strip()])
     if "~" in sample:
         delim = "~"
