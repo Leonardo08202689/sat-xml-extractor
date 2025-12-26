@@ -347,7 +347,14 @@ def parse_xml_payment(xml_text):
                 if doc_relacionados:
                     for docto in doc_relacionados:
                         folio_docto = docto.get('Folio', '')
-                        monto_docto = float(docto.get('MontoPagedo', '0') or docto.get('MontoPagado', '0') or 0)
+                        # CORREGIDO: buscar ImPagado, ImpPagado, MontoPagado, etc.
+                        monto_docto = float(
+                            docto.get('ImPagado', '0') or 
+                            docto.get('ImpPagado', '0') or 
+                            docto.get('MontoPagado', '0') or 
+                            docto.get('MontoPagedo', '0') or 
+                            0
+                        )
 
                         rows.append({
                             'Fecha': fecha_comprobante,
