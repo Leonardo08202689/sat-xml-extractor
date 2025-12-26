@@ -665,8 +665,9 @@ with tab1:
 # PESTAÑA 2: PAGOS
 # ============================================================================
 with tab2:
-    st.markdown("### Procesar Pagos XML")
+    st.markdown("### 💰 Procesar Pagos y Análisis de Facturas")
     
+    # Sección 1: Metadata SAT
     meta_file_pay = st.file_uploader(
         "(Opcional) Subir Metadata del SAT (.txt) para llenar Estado (Vigente/Cancelado)",
         type="txt",
@@ -685,170 +686,169 @@ with tab2:
         except Exception as e:
             st.markdown(f'<div class="status-error">❌ No se pudo leer la metadata: {str(e)}</div>', unsafe_allow_html=True)
     
+    st.markdown("---")
+    
+    # Sección 2: Complementos de Pago (REP)
+    st.markdown("#### 📄 Complementos de Pago (REP)")
     uploaded_files_pay = st.file_uploader(
-        "Seleccionar archivos XML (Pagos)",
+        "Seleccionar archivos XML (Complementos de Pago)",
         type="xml",
         accept_multiple_files=True,
         key="payments",
-        help="Arrastra o selecciona múltiples archivos XML de pagos"
+        help="Arrastra o selecciona múltiples archivos XML de pagos tipo P"
     )
     
-    if uploaded_files_pay:
-        st.markdown(f'<div class="status-info">📁 {len(uploaded_files_pay)} archivos seleccionados</div>', unsafe_allow_html=True)
-        
-        col1, col2 = st.columns([2, 2])
-        with col1:
-            process_btn_pay = st.button("Procesar y Descargar", type="primary", use_container_width=True, key="proc_pay")
-        with col2:
-            preview_btn_pay = st.button("Vista Previa", type="secondary", use_container_width=True, key="prev_pay")
-        
-        if process_btn_pay:
-            with st.spinner("Procesando pagos..."):
-                df_pay, errors_pay = process_payment_files(uploaded_files_pay)
-                
-                if df_pay is not None:
-                    df_pay = apply_metadata_estado(df_pay, meta_df_pay)
-                    # Guardar en sesión para tab3
-                    st.session_state.df_pagos = df_pay
-                
-                if df_pay is not None and len(df_pay) > 0:
-                    export_pay = df_pay.copy()
-                    if 'UUID' in export_pay.columns:
-                        export_pay = export_pay.drop(columns='UUID')
-                    
-                    output_pay = BytesIO()
-                    with pd.ExcelWriter(output_pay, engine='openpyxl') as writer:
-                        export_pay.to_excel(writer, sheet_name='Pagos', index=False)
-                        worksheet = writer.sheets['Pagos']
-                        column_widths = {
-                            'Receptor': 35, 'Fecha': 20, 'Mes': 12, 'RFC Receptor': 15,
-                            'Folio Pago': 15, 'Folio Documento': 15, 'UUID Factura': 40,
-                            'Monto Pagado': 15, 'Estado': 14
-                        }
-                        for idx, col in enumerate(export_pay.columns):
-                            width = column_widths.get(col, 20)
-                            col_letter = chr(65 + idx) if idx < 26 else chr(65 + (idx // 26) - 1) + chr(65 + (idx % 26))
-                            worksheet.column_dimensions[col_letter].width = width
-                    
-                    output_pay.seek(0)
-                    st.markdown(f'<div class="status-success">✅ {len(df_pay)} pagos procesados y ordenados cronológicamente</div>', unsafe_allow_html=True)
-                    st.download_button(
-                        label="📥 Descargar Excel",
-                        data=output_pay.getvalue(),
-                        file_name=f"Pagos_SAT_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
-                    
-                    if errors_pay:
-                        st.markdown(f'<div class="status-warning">⚠️ Advertencias: {len(errors_pay)} archivos con problemas</div>', unsafe_allow_html=True)
-                        with st.expander("Ver detalles"):
-                            for error in errors_pay:
-                                st.text(error)
-                else:
-                    st.markdown('<div class="status-error">❌ No se encontraron pagos válidos</div>', unsafe_allow_html=True)
-                    if errors_pay:
-                        for error in errors_pay:
-                            st.error(error)
-        
-        if preview_btn_pay:
-            df_pay, errors_pay = process_payment_files(uploaded_files_pay)
-            if df_pay is not None:
-                df_pay = apply_metadata_estado(df_pay, meta_df_pay)
-            
-            if df_pay is not None and len(df_pay) > 0:
-                st.markdown("#### Vista Previa (Ordenada cronológicamente)")
-                st.dataframe(df_pay.head(15), use_container_width=True, height=400)
-                st.caption(f"Mostrando primeros 15 de {len(df_pay)} pagos")
-                if errors_pay:
-                    with st.expander("Advertencias"):
-                        for error in errors_pay:
-                            st.text(error)
-            else:
-                st.markdown('<div class="status-error">❌ Error al procesar archivos</div>', unsafe_allow_html=True)
-
-# ============================================================================
-# PESTAÑA 3: ANÁLISIS
-# ============================================================================
-with tab3:
-    st.markdown("### 📊 Análisis de Facturas Emitidas vs Pagos")
-    st.info("Sube tus **facturas emitidas (XML)** y cruza con los **complementos de pago** procesados.")
-    
+    # Sección 3: Facturas Emitidas
+    st.markdown("#### 📊 Facturas Emitidas")
     uploaded_facturas = st.file_uploader(
-        "Seleccionar XMLs de Facturas Emitidas",
+        "Seleccionar archivos XML (Facturas Emitidas)",
         type="xml",
         accept_multiple_files=True,
-        key="analisis_facturas"
+        key="analisis_facturas",
+        help="Arrastra o selecciona múltiples archivos XML de facturas que emitiste"
     )
     
-    if 'df_pagos' not in st.session_state:
-        st.warning("⚠️ Primero procesa los **Pagos** (Tab 2)")
-    elif uploaded_facturas:
-        if st.button("🔍 Generar Análisis", type="primary", use_container_width=True):
-            with st.spinner("Procesando facturas emitidas..."):
-                df_facturas, errors = process_invoice_files(uploaded_facturas)
+    st.markdown("---")
+    
+    # Botones de procesamiento
+    col1, col2 = st.columns([2, 2])
+    with col1:
+        process_btn = st.button("🔍 Generar Análisis Completo", type="primary", use_container_width=True, key="proc_all")
+    with col2:
+        preview_btn = st.button("👁️ Vista Previa", type="secondary", use_container_width=True, key="prev_all")
+    
+    # Procesamiento
+    if process_btn or preview_btn:
+        with st.spinner("Procesando archivos..."):
+            df_pagos = None
+            df_facturas = None
+            errors_pay = []
+            errors_fact = []
+            
+            # 1. Procesar complementos de pago
+            if uploaded_files_pay:
+                df_pagos, errors_pay = process_payment_files(uploaded_files_pay)
+                if df_pagos is not None:
+                    df_pagos = apply_metadata_estado(df_pagos, meta_df_pay)
+                    st.session_state.df_pagos = df_pagos
+                    st.markdown(f'<div class="status-success">✅ {len(df_pagos)} pagos procesados</div>', unsafe_allow_html=True)
+            
+            # 2. Procesar facturas emitidas
+            if uploaded_facturas:
+                df_facturas, errors_fact = process_invoice_files(uploaded_facturas)
+                if df_facturas is not None:
+                    df_facturas = apply_metadata_estado(df_facturas, meta_df_pay)
+                    st.markdown(f'<div class="status-success">✅ {len(df_facturas)} facturas procesadas</div>', unsafe_allow_html=True)
+            
+            # 3. Generar análisis si hay ambos
+            if df_facturas is not None and len(df_facturas) > 0:
+                # Filtrar facturas vigentes
+                if 'Estado' in df_facturas.columns:
+                    facturas_vigentes = df_facturas[df_facturas['Estado'].str.contains('Vigente', na=False, case=False)].copy()
+                else:
+                    facturas_vigentes = df_facturas.copy()
                 
-                if df_facturas is not None and len(df_facturas) > 0:
-                    df_pagos = st.session_state.df_pagos
+                # Cruzar con pagos si existen
+                if df_pagos is not None and 'UUID Factura' in df_pagos.columns:
+                    # Filtrar pagos válidos
+                    pagos_validos = df_pagos[df_pagos['UUID Factura'].notna() & (df_pagos['UUID Factura'] != '')].copy()
                     
-                    if 'Estado' in df_facturas.columns:
-                        facturas_vigentes = df_facturas[df_facturas['Estado'].str.contains('Vigente', na=False)].copy()
+                    if len(pagos_validos) > 0:
+                        pagos_agrupados = pagos_validos.groupby('UUID Factura').agg({
+                            'Monto Pagado': 'sum',
+                            'Mes': 'first',
+                            'Fecha': 'first'
+                        }).reset_index()
+                        
+                        analisis = facturas_vigentes.merge(
+                            pagos_agrupados,
+                            left_on='UUID',
+                            right_on='UUID Factura',
+                            how='left',
+                            suffixes=('', '_Pago')
+                        )
                     else:
-                        facturas_vigentes = df_facturas.copy()
-                    
-                    pagos_agrupados = df_pagos.groupby('UUID Factura').agg({
-                        'Monto Pagado': 'sum',
-                        'Mes': 'first',
-                        'Fecha': 'first'
-                    }).reset_index()
-                    
-                    analisis = facturas_vigentes.merge(
-                        pagos_agrupados,
-                        left_on='UUID',
-                        right_on='UUID Factura',
-                        how='left',
-                        suffixes=('', '_Pago')
-                    )
-                    
-                    analisis['Observación'] = analisis['Monto Pagado'].apply(
-                        lambda x: 'Pagada' if pd.notna(x) and x > 0 else 'Pendiente'
-                    )
-                    analisis['FaltaREP'] = analisis['Monto Pagado'].isna()
+                        st.warning("⚠️ Los complementos de pago no tienen UUID de facturas relacionadas")
+                        analisis = facturas_vigentes.copy()
+                        analisis['Monto Pagado'] = None
+                        analisis['Mes'] = None
+                else:
+                    st.info("ℹ️ No se subieron complementos de pago. Mostrando todas las facturas como pendientes.")
+                    analisis = facturas_vigentes.copy()
+                    analisis['Monto Pagado'] = None
+                    analisis['Mes'] = None
+                
+                # Generar columnas de análisis
+                analisis['Observación'] = analisis['Monto Pagado'].apply(
+                    lambda x: 'Pagada' if pd.notna(x) and x > 0 else 'Pendiente'
+                )
+                analisis['FaltaREP'] = analisis['Monto Pagado'].isna()
+                
+                if 'Mes' in analisis.columns:
                     analisis = analisis.rename(columns={'Mes': 'MES PAGO'})
-                    
-                    cols = ['UUID', 'Fecha', 'RFC Emisor', 'Emisor', 'Total', 
-                            'MES PAGO', 'Monto Pagado', 'Observación', 'FaltaREP']
-                    if 'Estado' in analisis.columns:
-                        cols.append('Estado')
-                    
-                    analisis_export = analisis[[c for c in cols if c in analisis.columns]]
-                    
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Total Facturas", len(facturas_vigentes))
-                    with col2:
-                        st.metric("Pagadas", (~analisis['FaltaREP']).sum())
-                    with col3:
-                        st.metric("Pendientes", analisis['FaltaREP'].sum())
-                    
+                
+                # Seleccionar columnas
+                cols = ['UUID', 'Fecha', 'RFC Emisor', 'Emisor', 'Total']
+                if 'MES PAGO' in analisis.columns:
+                    cols.append('MES PAGO')
+                cols.extend(['Monto Pagado', 'Observación', 'FaltaREP'])
+                if 'Estado' in analisis.columns:
+                    cols.append('Estado')
+                
+                analisis_export = analisis[[c for c in cols if c in analisis.columns]]
+                
+                # Métricas
+                st.markdown("---")
+                st.markdown("### 📊 Resultados del Análisis")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Facturas", len(analisis))
+                with col2:
+                    st.metric("✅ Pagadas", (~analisis['FaltaREP']).sum())
+                with col3:
+                    st.metric("⏳ Pendientes", analisis['FaltaREP'].sum())
+                
+                # Vista previa o completa
+                if preview_btn:
+                    st.markdown("#### Vista Previa (Primeras 20 facturas)")
+                    st.dataframe(analisis_export.head(20), use_container_width=True, height=400)
+                    st.caption(f"Mostrando 20 de {len(analisis)} facturas")
+                else:
                     st.dataframe(analisis_export, use_container_width=True, height=400)
-                    
+                
+                # Botón de descarga
+                if process_btn:
                     output = BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        # Hoja 1: Análisis
                         analisis_export.to_excel(writer, sheet_name='Análisis', index=False)
-                    output.seek(0)
+                        
+                        # Hoja 2: Pagos (si existen)
+                        if df_pagos is not None:
+                            export_pagos = df_pagos.drop(columns='UUID', errors='ignore')
+                            export_pagos.to_excel(writer, sheet_name='Pagos', index=False)
+                        
+                        # Hoja 3: Facturas completas
+                        df_facturas.to_excel(writer, sheet_name='Facturas', index=False)
                     
+                    output.seek(0)
                     st.download_button(
-                        label="📥 Descargar Análisis",
+                        label="📥 Descargar Análisis Completo (Excel)",
                         data=output.getvalue(),
-                        file_name=f"Analisis_Facturas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                        file_name=f"Analisis_Completo_SAT_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True
                     )
-                    
-                    if errors:
-                        with st.expander("⚠️ Advertencias"):
-                            for e in errors:
-                                st.text(e)
-                else:
-                    st.error("No se pudieron procesar las facturas")
+                
+                # Mostrar errores si existen
+                all_errors = errors_pay + errors_fact
+                if all_errors:
+                    st.markdown(f'<div class="status-warning">⚠️ {len(all_errors)} archivos con problemas</div>', unsafe_allow_html=True)
+                    with st.expander("Ver detalles"):
+                        for error in all_errors:
+                            st.text(error)
+            
+            elif not uploaded_facturas:
+                st.warning("⚠️ Sube las **facturas emitidas** para generar el análisis")
+            else:
+                st.error("❌ No se pudieron procesar las facturas")
