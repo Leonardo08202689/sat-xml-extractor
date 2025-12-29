@@ -382,7 +382,7 @@ def parse_xml_payment(xml_text):
     except Exception:
         return []
 
-# ============= PARSER PARA FACTURAS EMITIDAS =============
+# ============= PARSER PARA FACTURAS EMITIDAS ============= 
 
 def parse_xml_emitted_invoice(xml_text):
     """Parsea un XML de factura emitida y devuelve UNA fila con la estructura deseada"""
@@ -591,7 +591,7 @@ def process_emitted_invoice_files(uploaded_files):
 
 # ============= UI CON PESTAÑAS =============
 
-tab1, tab2, tab3 = st.tabs(["📄 Facturas", "💰 Pagos", "📤 Facturas emitidas"])
+tab1, tab2, tab3 = st.tabs(["📄 Facturas Recibidas", "💰 Pagos", "📤 Facturas emitidas"])
 
 # ============= PESTAÑA 1: FACTURAS (RECIBIDAS) =============
 
