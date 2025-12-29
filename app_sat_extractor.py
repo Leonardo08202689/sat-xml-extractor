@@ -185,7 +185,7 @@ NS = {
     'pago20': 'http://www.sat.gob.mx/Pagos20'
 }
 
-# ============= PARSERS PARA FACTURAS =============
+# ============= PARSERS PARA FACTURAS (RECIBIDAS) =============
 
 def parse_xml_invoice_one_row(xml_text):
     """Parsea un XML de factura y devuelve UNA fila por factura"""
@@ -297,10 +297,10 @@ def parse_xml_invoice_one_row(xml_text):
             'Moneda': moneda
         }
 
-    except Exception as e:
+    except Exception:
         return None
 
-# ============= PARSERS PARA PAGOS =============
+# ============= PARSER PARA PAGOS =============
 
 def parse_xml_payment(xml_text):
     """Parsea un XML de pago (Comprobante de Pago con complemento pago20)"""
@@ -349,10 +349,10 @@ def parse_xml_payment(xml_text):
                         folio_docto = docto.get('Folio', '')
                         # CORREGIDO: leer ImpPagado correctamente
                         monto_docto = float(
-                            docto.get('ImpPagado', '0') or 
-                            docto.get('ImPagado', '0') or 
-                            docto.get('MontoPagado', '0') or 
-                            docto.get('MontoPagedo', '0') or 
+                            docto.get('ImpPagado', '0') or
+                            docto.get('ImPagado', '0') or
+                            docto.get('MontoPagado', '0') or
+                            docto.get('MontoPagedo', '0') or
                             0
                         )
 
@@ -379,8 +379,86 @@ def parse_xml_payment(xml_text):
 
         return rows
 
-    except Exception as e:
+    except Exception:
         return []
+
+# ============= PARSER PARA FACTURAS EMITIDAS =============
+
+def parse_xml_emitted_invoice(xml_text):
+    """Parsea un XML de factura emitida y devuelve UNA fila con la estructura deseada"""
+    try:
+        root = ET.fromstring(xml_text)
+
+        # Datos generales
+        fecha = root.get('Fecha', '')
+        subtotal = float(root.get('SubTotal', '0') or 0)
+        total = float(root.get('Total', '0') or 0)
+        descuento = float(root.get('Descuento', '0') or 0)
+        folio = root.get('Folio', '')
+        serie = root.get('Serie', '')
+        no_factura = f"{serie}{folio}" if serie else folio
+
+        # Receptor (cliente)
+        receptor = root.find('cfdi:Receptor', NS)
+        if receptor is None:
+            receptor = root.find('cfdi3:Receptor', NS)
+        if receptor is None:
+            receptor = root.find('Receptor')
+
+        cliente_nombre = receptor.get('Nombre', '') if receptor is not None else ''
+        cliente_rfc = receptor.get('Rfc', '') if receptor is not None else ''
+
+        # Impuestos a nivel comprobante
+        iva_trasladado = 0.0
+        iva_retenido = 0.0
+
+        impuestos = root.find('cfdi:Impuestos', NS)
+        if impuestos is None:
+            impuestos = root.find('cfdi3:Impuestos', NS)
+        if impuestos is None:
+            impuestos = root.find('Impuestos')
+
+        if impuestos is not None:
+            # Traslados
+            traslados = impuestos.findall('cfdi:Traslados/cfdi:Traslado', NS) or \
+                        impuestos.findall('cfdi3:Traslados/cfdi3:Traslado', NS) or \
+                        impuestos.findall('.//Traslado')
+            for t in traslados:
+                if t.get('Impuesto', '') == '002':
+                    iva_trasladado += float(t.get('Importe', '0') or 0)
+
+            # Retenciones
+            retenciones = impuestos.findall('cfdi:Retenciones/cfdi:Retencion', NS) or \
+                          impuestos.findall('cfdi3:Retenciones/cfdi3:Retencion', NS) or \
+                          impuestos.findall('.//Retencion')
+            for r in retenciones:
+                if r.get('Impuesto', '') == '002':
+                    iva_retenido += float(r.get('Importe', '0') or 0)
+
+        # Estatus básico (luego puedes enriquecerlo)
+        estatus = 'Emitida'
+
+        # Formato fecha dd/mm/aa
+        try:
+            fecha_dt = pd.to_datetime(fecha, errors='coerce')
+            fecha_fmt = fecha_dt.strftime('%d/%m/%y') if pd.notnull(fecha_dt) else fecha
+        except Exception:
+            fecha_fmt = fecha
+
+        return {
+            'FECHA DD/MM/AA': fecha_fmt,
+            'CLIENTE': cliente_nombre,
+            'RFC': cliente_rfc,
+            'No FACTURA': no_factura,
+            'ESTATUS': estatus,
+            'Subtotal': round(subtotal, 2),
+            'OTRO (DESCUENTO)': round(descuento, 2),
+            'IVA': round(iva_trasladado, 2),
+            'RET IVA': round(iva_retenido, 2),
+            'TOTAL': round(total, 2),
+        }
+    except Exception:
+        return None
 
 # ============= PROCESADORES DE ARCHIVOS =============
 
@@ -471,11 +549,51 @@ def process_payment_files(uploaded_files):
 
     return None, errors
 
+def process_emitted_invoice_files(uploaded_files):
+    """Procesa múltiples archivos XML de facturas emitidas"""
+    all_rows = []
+    errors = []
+
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+
+    for idx, uploaded_file in enumerate(uploaded_files):
+        try:
+            xml_content = uploaded_file.read().decode('utf-8', errors='ignore')
+            row = parse_xml_emitted_invoice(xml_content)
+
+            if row:
+                all_rows.append(row)
+                status_text.text(f"Procesado: {uploaded_file.name}")
+            else:
+                errors.append(f"{uploaded_file.name}: No se pudo extraer información")
+
+            progress_bar.progress((idx + 1) / len(uploaded_files))
+
+        except Exception as e:
+            errors.append(f"{uploaded_file.name}: {str(e)}")
+
+    progress_bar.empty()
+    status_text.empty()
+
+    if all_rows:
+        df = pd.DataFrame(all_rows)
+        # Ordenar por fecha si se pudo parsear
+        try:
+            df['_fecha_sort'] = pd.to_datetime(df['FECHA DD/MM/AA'], dayfirst=True, errors='coerce')
+            df = df.sort_values('_fecha_sort').drop(columns=['_fecha_sort'])
+        except Exception:
+            pass
+        df = df.reset_index(drop=True)
+        return df, errors
+
+    return None, errors
+
 # ============= UI CON PESTAÑAS =============
 
-tab1, tab2 = st.tabs(["📄 Facturas", "💰 Pagos"])
+tab1, tab2, tab3 = st.tabs(["📄 Facturas", "💰 Pagos", "📤 Facturas emitidas"])
 
-# ============= PESTAÑA 1: FACTURAS =============
+# ============= PESTAÑA 1: FACTURAS (RECIBIDAS) =============
 
 with tab1:
     st.markdown("### Procesar Facturas XML")
@@ -642,3 +760,110 @@ with tab2:
             else:
                 st.markdown('<div class="status-error">Error al procesar archivos</div>', unsafe_allow_html=True)
 
+# ============= PESTAÑA 3: FACTURAS EMITIDAS =============
+
+with tab3:
+    st.markdown("### Procesar Facturas Emitidas XML")
+
+    uploaded_files_emit = st.file_uploader(
+        "Seleccionar archivos XML (Facturas emitidas)",
+        type=['xml'],
+        accept_multiple_files=True,
+        key="emitted_invoices",
+        help="Arrastra o selecciona múltiples archivos XML emitidos"
+    )
+
+    if uploaded_files_emit:
+        st.markdown(
+            f'<div class="status-info">{len(uploaded_files_emit)} archivo(s) seleccionado(s)</div>',
+            unsafe_allow_html=True
+        )
+
+        col1, col2 = st.columns([2, 2])
+
+        with col1:
+            process_btn_emit = st.button(
+                'Procesar y Descargar',
+                type="primary",
+                use_container_width=True,
+                key="proc_emit"
+            )
+
+        with col2:
+            preview_btn_emit = st.button(
+                'Vista Previa',
+                type="secondary",
+                use_container_width=True,
+                key="prev_emit"
+            )
+
+        if process_btn_emit:
+            with st.spinner('Procesando facturas emitidas...'):
+                df_emit, errors_emit = process_emitted_invoice_files(uploaded_files_emit)
+
+            if df_emit is not None and len(df_emit) > 0:
+                output_emit = BytesIO()
+                with pd.ExcelWriter(output_emit, engine='openpyxl') as writer:
+                    df_emit.to_excel(writer, sheet_name='Facturas emitidas', index=False)
+
+                    worksheet = writer.sheets['Facturas emitidas']
+                    column_widths = {
+                        'FECHA DD/MM/AA': 18,
+                        'CLIENTE': 35,
+                        'RFC': 15,
+                        'No FACTURA': 15,
+                        'ESTATUS': 12,
+                        'Subtotal': 14,
+                        'OTRO (DESCUENTO)': 18,
+                        'IVA': 12,
+                        'RET IVA': 12,
+                        'TOTAL': 14,
+                    }
+                    for idx, col in enumerate(df_emit.columns):
+                        width = column_widths.get(col, 20)
+                        col_letter = chr(65 + idx) if idx < 26 else chr(65 + idx // 26 - 1) + chr(65 + idx % 26)
+                        worksheet.column_dimensions[col_letter].width = width
+
+                output_emit.seek(0)
+
+                st.markdown(
+                    f'<div class="status-success">{len(df_emit)} factura(s) emitida(s) procesada(s)</div>',
+                    unsafe_allow_html=True
+                )
+
+                st.download_button(
+                    label="Descargar Excel",
+                    data=output_emit.getvalue(),
+                    file_name=f"Facturas_emitidas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+
+                if errors_emit:
+                    st.markdown(
+                        f'<div class="status-warning">Advertencias: {len(errors_emit)} archivo(s) con problemas</div>',
+                        unsafe_allow_html=True
+                    )
+                    with st.expander("Ver detalles"):
+                        for error in errors_emit:
+                            st.text(error)
+            else:
+                st.markdown('<div class="status-error">No se encontraron facturas emitidas válidas</div>', unsafe_allow_html=True)
+                if errors_emit:
+                    for error in errors_emit:
+                        st.error(error)
+
+        if preview_btn_emit:
+            df_emit, errors_emit = process_emitted_invoice_files(uploaded_files_emit)
+
+            if df_emit is not None and len(df_emit) > 0:
+                st.markdown("### Vista Previa")
+                st.dataframe(df_emit.head(20), use_container_width=True, height=400)
+                st.caption(f"Mostrando primeras {min(20, len(df_emit))} de {len(df_emit)} facturas emitidas")
+
+                if errors_emit:
+                    with st.expander("Advertencias"):
+                        for error in errors_emit:
+                            st.text(error)
+            else:
+                st.markdown('<div class="status-error">Error al procesar archivos</div>', unsafe_allow_html=True)
