@@ -494,6 +494,12 @@ def process_invoice_files(uploaded_files):
         df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
         df = df.sort_values('Fecha').reset_index(drop=True)
         df['Fecha'] = df['Fecha'].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+        # Reordenar columnas según el orden deseado
+        columnas_ordenadas = ['UUID', 'Tipo', 'Fecha', 'Emisor', 'RFC Emisor', 'Descripcion', 
+                              'Subtotal', 'IVA', 'IVA Retenido', 'ISR Retenido', 'IEPS', 'Total']
+        df = df[columnas_ordenadas]
+
         return df, errors
 
     return None, errors
